@@ -2,7 +2,7 @@
   "name": "fumadocs-vscode-plugin",
   "displayName": "Fumadocs Helper",
   "description": "Makes editing Fumadocs MDX easy: insert pretty components, autocomplete props, hover docs, and catch mistakes.",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "publisher": "researchanddesire",
   "license": "MIT",
   "repository": {
@@ -52,6 +52,23 @@
         "command": "fumadocs.newDocPage",
         "title": "Fumadocs: New Doc Page",
         "category": "Fumadocs"
+      },
+      {
+        "command": "fumadocs.openPreview",
+        "title": "Fumadocs: Open Preview to the Side",
+        "category": "Fumadocs",
+        "icon": "$(open-preview)"
+      },
+      {
+        "command": "fumadocs.insertImage",
+        "title": "Fumadocs: Insert Image",
+        "category": "Fumadocs",
+        "icon": "$(device-camera)"
+      },
+      {
+        "command": "fumadocs.convertAll",
+        "title": "Fumadocs: Convert All Markdown to Components",
+        "category": "Fumadocs"
       }
     ],
     "menus": {
@@ -60,6 +77,28 @@
           "command": "fumadocs.insertComponent",
           "when": "editorLangId == mdx || editorLangId == markdown",
           "group": "1_modification"
+        },
+        {
+          "command": "fumadocs.insertImage",
+          "when": "editorLangId == mdx || editorLangId == markdown",
+          "group": "1_modification"
+        },
+        {
+          "command": "fumadocs.convertAll",
+          "when": "editorLangId == mdx || editorLangId == markdown",
+          "group": "1_modification"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "fumadocs.openPreview",
+          "when": "editorLangId == mdx || editorLangId == markdown",
+          "group": "navigation"
+        },
+        {
+          "command": "fumadocs.insertImage",
+          "when": "editorLangId == mdx || editorLangId == markdown",
+          "group": "navigation"
         }
       ]
     },
@@ -68,6 +107,12 @@
         "command": "fumadocs.insertComponent",
         "key": "ctrl+alt+i",
         "mac": "cmd+alt+i",
+        "when": "editorTextFocus && (editorLangId == mdx || editorLangId == markdown)"
+      },
+      {
+        "command": "fumadocs.openPreview",
+        "key": "ctrl+alt+v",
+        "mac": "cmd+alt+v",
         "when": "editorTextFocus && (editorLangId == mdx || editorLangId == markdown)"
       }
     ],
@@ -90,10 +135,14 @@
     "package": "vsce package --no-dependencies"
   },
   "devDependencies": {
+    "@types/markdown-it": "^14.1.2",
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.85.0",
     "@vscode/vsce": "^3.2.1",
     "esbuild": "^0.24.2",
     "typescript": "^5.7.2"
+  },
+  "dependencies": {
+    "markdown-it": "^14.2.0"
   }
 }

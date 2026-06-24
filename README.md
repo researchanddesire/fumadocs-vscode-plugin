@@ -6,6 +6,12 @@ It gives you a friendly way to add the "pretty" components (callouts, cards, tab
 
 ## What you get
 
+- **Interactive side-by-side preview** — press `Cmd+Alt+V` (macOS) / `Ctrl+Alt+V` (Windows/Linux), or click the preview icon in the editor's top-right toolbar, to open a live preview beside your file that shows roughly how Fumadocs will render it (callouts, cards, steps, tabs, accordions, file trees, images…). It's not just a preview — you can edit from it:
+  - **Click any block to edit it.** An inline editor opens for that block and your changes are written straight back to the file. (Each block edits its raw Markdown so formatting is never lost.)
+  - **Convert Markdown to components with one click.** When a block matches a known pattern, a button appears on hover: a **numbered list** → `<Steps>`, a **blockquote** (incl. GitHub admonitions like `> [!WARNING]`) → `<Callout>`, a **list of links** → a `<Cards>` grid.
+  - **Add more items to a component.** Container components show an add button on hover — _+ Add step_, _+ Add card_, _+ Add section_, _+ Add tab_, _+ Add file_ — which inserts a new, correctly-indented child.
+  - The preview is an approximation: interactive components like tabs and accordions are shown expanded.
+- **Insert image button** — click the camera icon in the editor toolbar (or right-click → _Fumadocs: Insert Image_). Pick an image from your computer; it's copied into an `images/` folder next to your document and inserted with the correct relative path. You choose plain Markdown `![alt](path)` or a zoomable `<ImageZoom>`.
 - **Insert Component palette** — press `Cmd+Alt+I` (macOS) / `Ctrl+Alt+I` (Windows/Linux), or right-click → _Fumadocs: Insert Component_, pick a component from a plain-English list, and a ready-to-fill snippet is dropped in. Tab through the blanks; dropdowns appear for choices like a callout's type.
 - **Type-ahead snippets** — start typing `callout`, `cards`, `tabs`, `steps`, `accordions`, `files`, `frontmatter`… and press Tab.
 - **Autocomplete** — type `<` to see every component; inside a tag, get its available props with descriptions.
@@ -118,7 +124,15 @@ A single manifest (`src/components.json`) is the source of truth. `src/manifest.
 - `src/completion.ts` — component name + prop autocomplete
 - `src/hover.ts` — hover documentation
 - `src/diagnostics.ts` — validation/warnings
+- `src/preview.ts` — interactive webview preview manager (two-way editing)
+- `src/render/mdxToHtml.ts` — splits MDX into source-mapped blocks and renders approximate Fumadocs HTML with edit/convert/add controls (uses `markdown-it`)
+- `media/preview.css` / `media/preview.js` — the preview's styling + the inline editing / convert / add-item client logic
+- `src/convert/detectors.ts` — finds Markdown blocks that have a nicer component form
+- `src/codeActions.ts` — the _Convert All_ command
+- `src/image.ts` — copy-and-insert image command
 - `src/extension.ts` — wires everything together on activation
+
+The preview rendering is intentionally approximate (no React runtime): MDX components are transformed into styled HTML that mimics Fumadocs. To tweak how a component looks in the preview, edit `media/preview.css` and the matching transform in `src/render/mdxToHtml.ts`.
 
 ## License
 

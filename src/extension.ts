@@ -3,6 +3,9 @@ import { insertComponent, newDocPage } from "./commands";
 import { completionProvider } from "./completion";
 import { hoverProvider } from "./hover";
 import { refreshDiagnostics } from "./diagnostics";
+import { openPreview } from "./preview";
+import { convertAll } from "./codeActions";
+import { insertImage } from "./image";
 
 const SELECTORS: vscode.DocumentSelector = [
   { language: "mdx", scheme: "file" },
@@ -16,6 +19,11 @@ export function activate(context: vscode.ExtensionContext): void {
       insertComponent,
     ),
     vscode.commands.registerCommand("fumadocs.newDocPage", newDocPage),
+    vscode.commands.registerCommand("fumadocs.openPreview", () =>
+      openPreview(context.extensionUri),
+    ),
+    vscode.commands.registerCommand("fumadocs.insertImage", insertImage),
+    vscode.commands.registerCommand("fumadocs.convertAll", convertAll),
   );
 
   context.subscriptions.push(
