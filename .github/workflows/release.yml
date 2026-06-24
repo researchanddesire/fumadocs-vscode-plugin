@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.1.0). Must already exist or will be created from the current ref."
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Resolve version
+        id: version
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          REF="${{ github.ref_name }}"
+          INPUT_TAG="${{ github.event.inputs.tag }}"
+          TAG="${INPUT_TAG:-$REF}"
+          echo "pkg_version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Verify tag matches package.json version
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          PKG_VERSION="${{ steps.version.outputs.pkg_version }}"
+          if [ "$TAG" != "v$PKG_VERSION" ]; then
+            echo "::error::Tag '$TAG' does not match package.json version 'v$PKG_VERSION'. Bump package.json or fix the tag."
+            exit 1
+          fi
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Package VSIX
+        run: npm run package
+
+      - name: Upload VSIX as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fumadocs-vscode-plugin-${{ steps.version.outputs.pkg_version }}
+          path: "*.vsix"
+
+      - name: Create GitHub Release with VSIX
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          gh release create "$TAG" *.vsix \
+            --title "$TAG" \
+            --generate-notes \
+            --verify-tag || \
+          gh release upload "$TAG" *.vsix --clobber

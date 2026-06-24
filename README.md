@@ -75,6 +75,25 @@ npm run typecheck  # tsc --noEmit
 npm run package    # produce a .vsix to share
 ```
 
+## Releasing a new version
+
+Releases are automated by GitHub Actions ([`.github/workflows/release.yml`](.github/workflows/release.yml)). To cut a release:
+
+1. Bump the `version` in [`package.json`](package.json) (e.g. `0.1.0` → `0.2.0`).
+2. Commit and push to `main`.
+3. Tag the commit with a matching `v` prefix and push the tag:
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+The workflow then verifies the tag matches `package.json`, typechecks, packages the `.vsix`, and publishes a **GitHub Release** with the `.vsix` attached (and release notes auto-generated). Teammates grab the `.vsix` from the [Releases page](https://github.com/researchanddesire/fumadocs-vscode-plugin/releases) and install it.
+
+> The tag **must** match the package version (`v0.2.0` ↔ `"version": "0.2.0"`), or the release job fails on purpose to prevent mismatched builds.
+
+Every push/PR to `main` also runs a [CI build](.github/workflows/ci.yml) that typechecks and smoke-tests packaging.
+
 ## How it's built
 
 A single manifest (`src/components.json`) is the source of truth. `src/manifest.ts` loads it, and the feature modules read from it:
