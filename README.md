@@ -94,6 +94,22 @@ The workflow then verifies the tag matches `package.json`, typechecks, packages 
 
 Every push/PR to `main` also runs a [CI build](.github/workflows/ci.yml) that typechecks and smoke-tests packaging.
 
+### Optional: publish to Open VSX
+
+If the `OPEN_VSX_TOKEN` repo secret is set, the release workflow also publishes to the [Open VSX registry](https://open-vsx.org), so teammates can install it directly from Cursor's extension search (no manual VSIX). If the secret is absent, that step is skipped and the GitHub Release is still created.
+
+One-time setup:
+
+1. Sign in to [open-vsx.org](https://open-vsx.org) with GitHub.
+2. Sign the publisher agreement: User Settings → "Eclipse Foundation Open VSX Publisher Agreement".
+3. Create an access token: [open-vsx.org/user-settings/tokens](https://open-vsx.org/user-settings/tokens) → Generate New Token.
+4. Create the `researchanddesire` namespace (must match `publisher` in `package.json`):
+   ```bash
+   npx ovsx create-namespace researchanddesire -p <token>
+   ```
+5. Add the token as a GitHub Actions secret named `OPEN_VSX_TOKEN`:
+   Repo → Settings → Secrets and variables → Actions → New repository secret. (Or `gh secret set OPEN_VSX_TOKEN`.)
+
 ## How it's built
 
 A single manifest (`src/components.json`) is the source of truth. `src/manifest.ts` loads it, and the feature modules read from it:

@@ -16,6 +16,8 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      OVSX_TOKEN: ${{ secrets.OPEN_VSX_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -70,3 +72,11 @@ jobs:
             --generate-notes \
             --verify-tag || \
           gh release upload "$TAG" *.vsix --clobber
+
+      - name: Publish to Open VSX
+        if: ${{ env.OVSX_TOKEN != '' }}
+        run: npx --yes ovsx publish *.vsix -p "$OVSX_TOKEN"
+
+      - name: Open VSX skipped
+        if: ${{ env.OVSX_TOKEN == '' }}
+        run: echo "OPEN_VSX_TOKEN secret not set - skipping Open VSX publish. The GitHub Release with the .vsix was still created."
