@@ -1,0 +1,181 @@
+{
+  "$comment": "Single source of truth for the Fumadocs Helper extension. Each entry drives the insert palette, autocomplete, hover docs, and validation. The component list must match what is registered in your Fumadocs app's getMDXComponents (apps/docs-*/src/components/mdx.tsx).",
+  "components": [
+    {
+      "name": "Callout",
+      "label": "Callout — info / warning box",
+      "description": "A highlighted box for tips, warnings, notes, or errors. Great for drawing attention to important information.",
+      "docs": "https://fumadocs.dev/docs/ui/components/callout",
+      "registeredByDefault": true,
+      "props": [
+        { "name": "title", "type": "string", "description": "Bold heading shown at the top of the box." },
+        { "name": "type", "type": "enum", "values": ["info", "warn", "error", "success"], "default": "info", "description": "Controls the color and icon." }
+      ],
+      "snippet": "<Callout type=\"${1|info,warn,error,success|}\" title=\"${2:Heads up}\">\n  ${3:Your message here.}\n</Callout>\n"
+    },
+    {
+      "name": "Cards",
+      "label": "Cards — grid of link cards",
+      "description": "A responsive grid container that holds multiple Card components.",
+      "docs": "https://fumadocs.dev/docs/ui/components/card",
+      "registeredByDefault": true,
+      "props": [],
+      "snippet": "<Cards>\n  <Card title=\"${1:First card}\" href=\"${2:/some-page}\" />\n  <Card title=\"${3:Second card}\" href=\"${4:/another-page}\" />\n</Cards>\n"
+    },
+    {
+      "name": "Card",
+      "label": "Card — single clickable card",
+      "description": "A clickable card with a title, optional description, and link. Usually placed inside <Cards>.",
+      "docs": "https://fumadocs.dev/docs/ui/components/card",
+      "registeredByDefault": true,
+      "props": [
+        { "name": "title", "type": "string", "description": "Card heading." },
+        { "name": "description", "type": "string", "description": "Optional supporting text under the title." },
+        { "name": "href", "type": "string", "description": "Where the card links to (a URL or /path)." },
+        { "name": "external", "type": "boolean", "description": "Open the link in a new tab." }
+      ],
+      "snippet": "<Card title=\"${1:Card title}\" href=\"${2:/some-page}\" description=\"${3:Short description}\" />\n"
+    },
+    {
+      "name": "Tabs",
+      "label": "Tabs — tabbed content",
+      "description": "Show several pieces of content in switchable tabs. Each tab is a <Tab> with a matching value.",
+      "docs": "https://fumadocs.dev/docs/ui/components/tabs",
+      "registeredByDefault": false,
+      "props": [
+        { "name": "items", "type": "array", "description": "The tab labels, e.g. {['npm', 'pnpm']}." }
+      ],
+      "snippet": "<Tabs items={['${1:npm}', '${2:pnpm}']}>\n  <Tab value=\"${1:npm}\">\n    ${3:First tab content.}\n  </Tab>\n  <Tab value=\"${2:pnpm}\">\n    ${4:Second tab content.}\n  </Tab>\n</Tabs>\n"
+    },
+    {
+      "name": "Tab",
+      "label": "Tab — one tab panel",
+      "description": "A single tab panel inside <Tabs>. Its value must match an entry in the Tabs items array.",
+      "docs": "https://fumadocs.dev/docs/ui/components/tabs",
+      "registeredByDefault": false,
+      "props": [
+        { "name": "value", "type": "string", "description": "Must match a label in the parent Tabs items array." }
+      ],
+      "snippet": "<Tab value=\"${1:label}\">\n  ${2:Tab content.}\n</Tab>\n"
+    },
+    {
+      "name": "Steps",
+      "label": "Steps — numbered steps",
+      "description": "A numbered list of steps for tutorials or guides. Each step is a <Step>.",
+      "docs": "https://fumadocs.dev/docs/ui/components/steps",
+      "registeredByDefault": false,
+      "props": [],
+      "snippet": "<Steps>\n  <Step>\n    ### ${1:First step}\n    ${2:What to do.}\n  </Step>\n  <Step>\n    ### ${3:Second step}\n    ${4:What to do next.}\n  </Step>\n</Steps>\n"
+    },
+    {
+      "name": "Step",
+      "label": "Step — one step",
+      "description": "A single step inside <Steps>. Add a heading and content inside.",
+      "docs": "https://fumadocs.dev/docs/ui/components/steps",
+      "registeredByDefault": false,
+      "props": [],
+      "snippet": "<Step>\n  ### ${1:Step title}\n  ${2:What to do.}\n</Step>\n"
+    },
+    {
+      "name": "Accordions",
+      "label": "Accordions — collapsible group",
+      "description": "A group of collapsible sections (FAQ style). Each section is an <Accordion>.",
+      "docs": "https://fumadocs.dev/docs/ui/components/accordion",
+      "registeredByDefault": false,
+      "props": [
+        { "name": "type", "type": "enum", "values": ["single", "multiple"], "default": "single", "description": "Whether one or many sections can be open at once." }
+      ],
+      "snippet": "<Accordions type=\"${1|single,multiple|}\">\n  <Accordion title=\"${2:Question one}\">\n    ${3:Answer.}\n  </Accordion>\n  <Accordion title=\"${4:Question two}\">\n    ${5:Answer.}\n  </Accordion>\n</Accordions>\n"
+    },
+    {
+      "name": "Accordion",
+      "label": "Accordion — one collapsible section",
+      "description": "A single collapsible section inside <Accordions>.",
+      "docs": "https://fumadocs.dev/docs/ui/components/accordion",
+      "registeredByDefault": false,
+      "props": [
+        { "name": "title", "type": "string", "description": "The clickable header text." },
+        { "name": "id", "type": "string", "description": "Optional anchor id for deep-linking." }
+      ],
+      "snippet": "<Accordion title=\"${1:Question}\">\n  ${2:Answer.}\n</Accordion>\n"
+    },
+    {
+      "name": "Files",
+      "label": "Files — file tree",
+      "description": "Render a file/folder tree to illustrate project structure.",
+      "docs": "https://fumadocs.dev/docs/ui/components/files",
+      "registeredByDefault": false,
+      "props": [],
+      "snippet": "<Files>\n  <Folder name=\"${1:src}\" defaultOpen>\n    <File name=\"${2:index.ts}\" />\n  </Folder>\n  <File name=\"${3:package.json}\" />\n</Files>\n"
+    },
+    {
+      "name": "Folder",
+      "label": "Folder — folder in a file tree",
+      "description": "A folder node inside <Files>. Can contain Files and other Folders.",
+      "docs": "https://fumadocs.dev/docs/ui/components/files",
+      "registeredByDefault": false,
+      "props": [
+        { "name": "name", "type": "string", "description": "Folder name." },
+        { "name": "defaultOpen", "type": "boolean", "description": "Expand the folder by default." }
+      ],
+      "snippet": "<Folder name=\"${1:folder}\" defaultOpen>\n  <File name=\"${2:file.ts}\" />\n</Folder>\n"
+    },
+    {
+      "name": "File",
+      "label": "File — file in a file tree",
+      "description": "A file node inside <Files> or <Folder>.",
+      "docs": "https://fumadocs.dev/docs/ui/components/files",
+      "registeredByDefault": false,
+      "props": [
+        { "name": "name", "type": "string", "description": "File name." }
+      ],
+      "snippet": "<File name=\"${1:file.ts}\" />\n"
+    },
+    {
+      "name": "TypeTable",
+      "label": "TypeTable — props / options table",
+      "description": "A nicely formatted table describing properties or options, with types and defaults.",
+      "docs": "https://fumadocs.dev/docs/ui/components/type-table",
+      "registeredByDefault": false,
+      "props": [
+        { "name": "type", "type": "object", "description": "An object describing each property." }
+      ],
+      "snippet": "<TypeTable\n  type={{\n    ${1:propName}: {\n      description: '${2:What it does}',\n      type: '${3:string}',\n      default: '${4:}',\n    },\n  }}\n/>\n"
+    },
+    {
+      "name": "Banner",
+      "label": "Banner — top-of-page banner",
+      "description": "A full-width announcement banner, typically placed at the very top of a page.",
+      "docs": "https://fumadocs.dev/docs/ui/components/banner",
+      "registeredByDefault": false,
+      "props": [
+        { "name": "id", "type": "string", "description": "Unique id so it can be dismissed and remembered." },
+        { "name": "variant", "type": "enum", "values": ["normal", "rainbow"], "default": "normal", "description": "Visual style." }
+      ],
+      "snippet": "<Banner id=\"${1:announcement}\" variant=\"${2|normal,rainbow|}\">\n  ${3:Your announcement.}\n</Banner>\n"
+    },
+    {
+      "name": "ImageZoom",
+      "label": "ImageZoom — zoomable image",
+      "description": "An image that can be clicked to zoom in.",
+      "docs": "https://fumadocs.dev/docs/ui/components/image-zoom",
+      "registeredByDefault": false,
+      "props": [
+        { "name": "src", "type": "string", "description": "Image path or URL." },
+        { "name": "alt", "type": "string", "description": "Alt text for accessibility." }
+      ],
+      "snippet": "<ImageZoom src=\"${1:/image.png}\" alt=\"${2:Description}\" />\n"
+    },
+    {
+      "name": "InlineTOC",
+      "label": "InlineTOC — inline table of contents",
+      "description": "An inline table of contents that lists the headings of the page or a section.",
+      "docs": "https://fumadocs.dev/docs/ui/components/inline-toc",
+      "registeredByDefault": false,
+      "props": [
+        { "name": "items", "type": "array", "description": "The TOC items to display." }
+      ],
+      "snippet": "<InlineTOC items={${1:toc}} />\n"
+    }
+  ]
+}

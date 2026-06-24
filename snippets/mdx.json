@@ -1,0 +1,111 @@
+{
+  "Frontmatter": {
+    "prefix": "frontmatter",
+    "body": [
+      "---",
+      "title: ${1:Page Title}",
+      "description: ${2:A short description of this page}",
+      "---",
+      "",
+      "$0"
+    ],
+    "description": "Page frontmatter (title + description)"
+  },
+  "Callout": {
+    "prefix": "callout",
+    "body": [
+      "<Callout type=\"${1|info,warn,error,success|}\" title=\"${2:Heads up}\">",
+      "  ${3:Your message here.}",
+      "</Callout>"
+    ],
+    "description": "Highlighted info/warning box"
+  },
+  "Cards": {
+    "prefix": "cards",
+    "body": [
+      "<Cards>",
+      "  <Card title=\"${1:First card}\" href=\"${2:/some-page}\" />",
+      "  <Card title=\"${3:Second card}\" href=\"${4:/another-page}\" />",
+      "</Cards>"
+    ],
+    "description": "Grid of link cards"
+  },
+  "Card": {
+    "prefix": "card",
+    "body": [
+      "<Card title=\"${1:Card title}\" href=\"${2:/some-page}\" description=\"${3:Short description}\" />"
+    ],
+    "description": "Single clickable card"
+  },
+  "Tabs": {
+    "prefix": "tabs",
+    "body": [
+      "<Tabs items={['${1:npm}', '${2:pnpm}']}>",
+      "  <Tab value=\"${1:npm}\">",
+      "    ${3:First tab content.}",
+      "  </Tab>",
+      "  <Tab value=\"${2:pnpm}\">",
+      "    ${4:Second tab content.}",
+      "  </Tab>",
+      "</Tabs>"
+    ],
+    "description": "Tabbed content"
+  },
+  "Steps": {
+    "prefix": "steps",
+    "body": [
+      "<Steps>",
+      "  <Step>",
+      "    ### ${1:First step}",
+      "    ${2:What to do.}",
+      "  </Step>",
+      "  <Step>",
+      "    ### ${3:Second step}",
+      "    ${4:What to do next.}",
+      "  </Step>",
+      "</Steps>"
+    ],
+    "description": "Numbered steps"
+  },
+  "Accordions": {
+    "prefix": "accordions",
+    "body": [
+      "<Accordions type=\"${1|single,multiple|}\">",
+      "  <Accordion title=\"${2:Question one}\">",
+      "    ${3:Answer.}",
+      "  </Accordion>",
+      "  <Accordion title=\"${4:Question two}\">",
+      "    ${5:Answer.}",
+      "  </Accordion>",
+      "</Accordions>"
+    ],
+    "description": "Collapsible FAQ group"
+  },
+  "Files": {
+    "prefix": "files",
+    "body": [
+      "<Files>",
+      "  <Folder name=\"${1:src}\" defaultOpen>",
+      "    <File name=\"${2:index.ts}\" />",
+      "  </Folder>",
+      "  <File name=\"${3:package.json}\" />",
+      "</Files>"
+    ],
+    "description": "File tree"
+  },
+  "TypeTable": {
+    "prefix": "typetable",
+    "body": [
+      "<TypeTable",
+      "  type={{",
+      "    ${1:propName}: {",
+      "      description: '${2:What it does}',",
+      "      type: '${3:string}',",
+      "      default: '${4:}',",
+      "    },",
+      "  }}",
+      "/>"
+    ],
+    "description": "Props / options table"
+  }
+}

@@ -1,0 +1,98 @@
+{
+  "name": "fumadocs-vscode-plugin",
+  "displayName": "Fumadocs Helper",
+  "description": "Makes editing Fumadocs MDX easy: insert pretty components, autocomplete props, hover docs, and catch mistakes.",
+  "version": "0.1.0",
+  "publisher": "researchanddesire",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/researchanddesire/fumadocs-vscode-plugin.git"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Snippets",
+    "Other"
+  ],
+  "keywords": [
+    "fumadocs",
+    "mdx",
+    "docs",
+    "documentation"
+  ],
+  "activationEvents": [
+    "onLanguage:mdx",
+    "onLanguage:markdown"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "mdx",
+        "aliases": [
+          "MDX",
+          "mdx"
+        ],
+        "extensions": [
+          ".mdx"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "fumadocs.insertComponent",
+        "title": "Fumadocs: Insert Component",
+        "category": "Fumadocs"
+      },
+      {
+        "command": "fumadocs.newDocPage",
+        "title": "Fumadocs: New Doc Page",
+        "category": "Fumadocs"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "fumadocs.insertComponent",
+          "when": "editorLangId == mdx || editorLangId == markdown",
+          "group": "1_modification"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "fumadocs.insertComponent",
+        "key": "ctrl+alt+i",
+        "mac": "cmd+alt+i",
+        "when": "editorTextFocus && (editorLangId == mdx || editorLangId == markdown)"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "mdx",
+        "path": "./snippets/mdx.json"
+      },
+      {
+        "language": "markdown",
+        "path": "./snippets/mdx.json"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "node esbuild.js --production",
+    "watch": "node esbuild.js --watch",
+    "typecheck": "tsc --noEmit",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.2.1",
+    "esbuild": "^0.24.2",
+    "typescript": "^5.7.2"
+  }
+}
