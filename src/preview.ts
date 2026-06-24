@@ -16,11 +16,11 @@ interface AddItemMessage {
   name: string;
 }
 
-interface RefreshMessage {
-  type: "refresh";
+interface LifecycleMessage {
+  type: "editStart" | "editEnd";
 }
 
-type WebviewMessage = ReplaceMessage | AddItemMessage | RefreshMessage;
+type WebviewMessage = ReplaceMessage | AddItemMessage | LifecycleMessage;
 
 const isPreviewable = (document: vscode.TextDocument): boolean =>
   document.languageId === "mdx" ||
@@ -41,8 +41,10 @@ class PreviewManager {
   private panel: vscode.WebviewPanel | undefined;
   private trackedUri: vscode.Uri | undefined;
   private debounce: NodeJS.Timeout | undefined;
-  /** When true, the next document change came from the webview; skip re-render. */
-  private suppressNext = false;
+  /** True while an inline editor is open in the webview; blocks all re-renders. */
+  private editing = false;
+  /** The webview shell is only written once; updates are patched in place. */
+  private initialized = false;
   private readonly disposables: vscode.Disposable[] = [];
 
   constructor(private readonly extensionUri: vscode.Uri) {}
@@ -97,7 +99,18 @@ class PreviewManager {
       return;
     }
 
-    if (message.type === "refresh") {
+    if (message.type === "editStart") {
+      // Lock rendering so the open inline editor is never clobbered.
+      this.editing = true;
+      if (this.debounce) {
+        clearTimeout(this.debounce);
+        this.debounce = undefined;
+      }
+      return;
+    }
+
+    if (message.type === "editEnd") {
+      this.editing = false;
       this.render(document);
       return;
     }
@@ -107,18 +120,19 @@ class PreviewManager {
       return;
     }
 
-    // live | apply -> replace a source range.
-    const range = new vscode.Range(
-      document.positionAt(message.start),
-      document.positionAt(message.end),
-    );
-    // "live" edits keep the in-place textarea open, so swallow the re-render.
-    this.suppressNext = message.type === "live";
-    const edit = new vscode.WorkspaceEdit();
-    edit.replace(document.uri, range, message.text);
-    await vscode.workspace.applyEdit(edit);
-    if (message.type === "apply") {
-      this.render(document);
+    if (message.type === "live" || message.type === "apply") {
+      const range = new vscode.Range(
+        document.positionAt(message.start),
+        document.positionAt(message.end),
+      );
+      const edit = new vscode.WorkspaceEdit();
+      edit.replace(document.uri, range, message.text);
+      await vscode.workspace.applyEdit(edit);
+      // "live" edits keep the in-place textarea open, so we never re-render here
+      // (the editing lock already blocks the resulting document-change render).
+      if (message.type === "apply") {
+        this.render(document);
+      }
     }
   }
 
@@ -161,16 +175,16 @@ class PreviewManager {
         ) {
           return;
         }
-        // A live edit from the webview already updated the open textarea, so
-        // skip re-rendering (which would discard it).
-        if (this.suppressNext) {
-          this.suppressNext = false;
+        // While an inline editor is open, the webview owns the document; don't
+        // re-render or we'd discard the editor and the user's focus/caret.
+        if (this.editing) {
           return;
         }
         this.scheduleRender(event.document);
       }),
       vscode.window.onDidChangeActiveTextEditor((editor) => {
-        if (editor && isPreviewable(editor.document)) {
+        // Don't switch the tracked document out from under an open inline editor.
+        if (!this.editing && editor && isPreviewable(editor.document)) {
           this.track(editor.document);
         }
       }),
@@ -178,6 +192,10 @@ class PreviewManager {
   }
 
   private track(document: vscode.TextDocument): void {
+    // Switching to a different file needs a fresh shell (resource roots change).
+    if (this.trackedUri?.toString() !== document.uri.toString()) {
+      this.initialized = false;
+    }
     this.trackedUri = document.uri;
     if (this.panel) {
       this.panel.title = `Preview: ${path.basename(document.fileName)}`;
@@ -197,7 +215,7 @@ class PreviewManager {
   }
 
   private render(document: vscode.TextDocument): void {
-    if (!this.panel) {
+    if (!this.panel || this.editing) {
       return;
     }
 
@@ -216,8 +234,14 @@ class PreviewManager {
 
     const { html } = renderMdx(document.getText(), resolveImage);
 
-    this.panel.webview.html = this.wrap(webview, html);
-    void this.panel.webview.postMessage({ type: "scrollRestore" });
+    if (this.initialized) {
+      // Patch the content in place so the webview never reloads (keeps scroll,
+      // focus, and client state intact).
+      void this.panel.webview.postMessage({ type: "update", html });
+    } else {
+      this.panel.webview.html = this.wrap(webview, html);
+      this.initialized = true;
+    }
   }
 
   private wrap(webview: vscode.Webview, bodyHtml: string): string {
@@ -259,6 +283,8 @@ class PreviewManager {
     this.disposables.length = 0;
     this.panel = undefined;
     this.trackedUri = undefined;
+    this.editing = false;
+    this.initialized = false;
   }
 }
 

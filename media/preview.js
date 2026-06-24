@@ -7,18 +7,7 @@
 
   const post = (message) => vscode.postMessage(message);
 
-  const restoreScroll = () => {
-    const state = vscode.getState();
-    if (state && typeof state.scrollY === "number") {
-      window.scrollTo(0, state.scrollY);
-    }
-  };
-
-  window.addEventListener("scroll", () => {
-    const state = vscode.getState() || {};
-    state.scrollY = window.scrollY;
-    vscode.setState(state);
-  });
+  const getContent = () => document.querySelector(".fd-content");
 
   // --- Inline editing -------------------------------------------------------
   let active = null; // { block, textarea, start, prev, timer }
@@ -31,7 +20,8 @@
       clearTimeout(active.timer);
     }
     active = null;
-    post({ type: "refresh" });
+    // Releases the render lock and re-renders with the latest content.
+    post({ type: "editEnd" });
   };
 
   const autosize = (textarea) => {
@@ -68,6 +58,10 @@
       return;
     }
 
+    // Lock rendering on the extension side BEFORE we open the editor, so no
+    // in-flight render can clobber it.
+    post({ type: "editStart" });
+
     const textarea = document.createElement("textarea");
     textarea.className = "fd-editor";
     textarea.value = raw;
@@ -77,6 +71,8 @@
     block.appendChild(textarea);
     autosize(textarea);
     textarea.focus();
+    const caret = raw.length;
+    textarea.setSelectionRange(caret, caret);
 
     active = { block, textarea, start, prev: raw, timer: null };
 
@@ -151,10 +147,17 @@
   });
 
   window.addEventListener("message", (event) => {
-    if (event.data && event.data.type === "scrollRestore") {
-      restoreScroll();
+    const data = event.data;
+    if (!data || data.type !== "update") {
+      return;
+    }
+    // Never patch over an open inline editor.
+    if (active) {
+      return;
+    }
+    const content = getContent();
+    if (content) {
+      content.innerHTML = data.html;
     }
   });
-
-  restoreScroll();
 })();
