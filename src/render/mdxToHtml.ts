@@ -444,9 +444,11 @@ const blockTools = (options: {
   conversion?: Conversion;
   component?: string;
 }): string => {
+  const codeIcon =
+    '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>';
   const buttons: string[] = [];
   buttons.push(
-    `<button class="fd-tool fd-tool-edit" title="Edit this block">Edit</button>`,
+    `<button class="fd-tool fd-tool-edit" title="Edit Markdown source">${codeIcon}</button>`,
   );
 
   if (options.conversion) {
@@ -488,6 +490,7 @@ const wrapBlock = (options: {
   `<div class="fd-block"${dataAttr("data-src-start", options.absStart)}` +
   dataAttr("data-src-end", options.absEnd) +
   dataAttr("data-raw", options.raw) +
+  (options.component ? dataAttr("data-component", options.component) : "") +
   `>${blockTools({ conversion: options.conversion, component: options.component })}` +
   `<div class="fd-block-content">${options.content}</div></div>`;
 

@@ -64,6 +64,9 @@ body {
   display: flex;
 }
 .fd-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-family: inherit;
   font-size: 11px;
   line-height: 1;
@@ -73,6 +76,12 @@ body {
   background: var(--vscode-button-secondaryBackground, rgba(128, 128, 128, 0.2));
   color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
   cursor: pointer;
+}
+.fd-tool-edit {
+  padding: 4px 6px;
+}
+.fd-tool svg {
+  display: block;
 }
 .fd-tool:hover {
   background: var(--vscode-button-background, var(--fd-accent));
@@ -98,6 +107,13 @@ body {
   resize: none;
   overflow: hidden;
   outline: none;
+}
+
+/* Inline WYSIWYG editing keeps the rendered style, just adds a focus ring. */
+.fd-block-content.fd-editing-inline {
+  outline: 2px solid var(--fd-accent);
+  outline-offset: 4px;
+  border-radius: 6px;
 }
 
 .fd-page-title {
