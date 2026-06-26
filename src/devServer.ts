@@ -26,6 +26,10 @@ export class DevServerManager {
   private readonly output: vscode.OutputChannel;
   private readonly statePath: string;
   private readonly pidPath: string;
+  /** Active content root, persisted to the state file for the renderer. */
+  private currentRoot: string | undefined;
+  /** Live-edit overrides (abs path -> unsaved buffer content). */
+  private overrides: Record<string, string> = {};
   /** Rolling tail of recent output, surfaced in the preview's error view. */
   private logBuffer = "";
 
@@ -61,7 +65,8 @@ export class DevServerManager {
    * base URL. Safe to call concurrently — starts are de-duplicated.
    */
   async ensure(root: string, onProgress?: ProgressFn): Promise<string> {
-    this.writeState(root);
+    this.currentRoot = root;
+    this.writeState();
 
     if (this.baseUrl && this.proc && this.proc.exitCode === null) {
       onProgress?.("Reusing the running preview server");
@@ -214,15 +219,29 @@ export class DevServerManager {
     this.recordLine("[server] stopped (restart requested)");
   }
 
-  private writeState(root: string): void {
+  /**
+   * Replace the live-edit overrides (unsaved buffer contents, keyed by absolute
+   * path) and persist them so the renderer picks them up on the next refresh.
+   */
+  setOverrides(overrides: Record<string, string>): void {
+    this.overrides = overrides;
+    this.writeState();
+  }
+
+  private writeState(): void {
+    if (!this.currentRoot) return;
     try {
       fs.writeFileSync(
         this.statePath,
-        JSON.stringify({ root }, null, 2),
+        JSON.stringify(
+          { root: this.currentRoot, overrides: this.overrides },
+          null,
+          2,
+        ),
         "utf8",
       );
     } catch (err) {
-      this.recordLine(`[state] failed to write root: ${String(err)}`);
+      this.recordLine(`[state] failed to write state: ${String(err)}`);
     }
   }
 

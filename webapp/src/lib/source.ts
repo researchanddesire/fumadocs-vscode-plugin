@@ -1,6 +1,6 @@
 import { loader } from 'fumadocs-core/source';
 import { lucideIconsPlugin } from 'fumadocs-core/source/lucide-icons';
-import { getContentRoot } from './content-root';
+import { getContentOverrides, getContentRoot } from './content-root';
 import { scanContentRoot, type PageFileData } from './scan';
 
 /**
@@ -11,7 +11,7 @@ import { scanContentRoot, type PageFileData } from './scan';
  */
 export function buildSource() {
   const root = getContentRoot();
-  const files = scanContentRoot(root);
+  const files = scanContentRoot(root, getContentOverrides());
 
   return loader({
     baseUrl: '/',

@@ -32,14 +32,21 @@ interface InsertTarget {
  * Insert a block-level `snippet` at the nearest "free" line at or below the
  * cursor — never inside a fenced code block or in the middle of a JSX
  * component — keeping blank-line separation around the inserted block.
+ *
+ * Returns the range the inserted block occupies in the document (so callers
+ * can keep editing it live), or null if nothing was inserted. Pass
+ * `targetEditor` to insert into a specific editor rather than the active one.
  */
-export async function insertBlockBelowCursor(snippet: string): Promise<boolean> {
-  const editor = vscode.window.activeTextEditor;
+export async function insertBlockBelowCursor(
+  snippet: string,
+  targetEditor?: vscode.TextEditor,
+): Promise<{ range: vscode.Range } | null> {
+  const editor = targetEditor ?? vscode.window.activeTextEditor;
   if (!editor || !isMarkdownEditor(editor)) {
     void vscode.window.showWarningMessage(
       "Open a Markdown or MDX file to insert content.",
     );
-    return false;
+    return null;
   }
 
   const doc = editor.document;
@@ -53,7 +60,7 @@ export async function insertBlockBelowCursor(snippet: string): Promise<boolean> 
   const edit = new vscode.WorkspaceEdit();
   edit.replace(doc.uri, range, text);
   const ok = await vscode.workspace.applyEdit(edit);
-  if (!ok) return false;
+  if (!ok) return null;
 
   const startPos = new vscode.Position(snippetStartLine, 0);
   editor.selection = new vscode.Selection(startPos, startPos);
@@ -61,7 +68,15 @@ export async function insertBlockBelowCursor(snippet: string): Promise<boolean> 
     new vscode.Range(startPos, startPos),
     vscode.TextEditorRevealType.InCenterIfOutsideViewport,
   );
-  return true;
+
+  const blockLines = block.split("\n");
+  const endLine = snippetStartLine + blockLines.length - 1;
+  const endChar = (blockLines.at(-1) ?? "").length;
+  const insertedRange = new vscode.Range(
+    startPos,
+    new vscode.Position(endLine, endChar),
+  );
+  return { range: insertedRange };
 }
 
 /**

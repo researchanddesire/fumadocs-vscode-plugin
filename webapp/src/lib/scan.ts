@@ -42,12 +42,22 @@ function humanize(value: string): string {
 /**
  * Recursively scan a directory into Fumadocs virtual files (pages + meta).
  * Reads the filesystem fresh on every call so edits show up on reload.
+ *
+ * `overrides` maps an absolute file path to in-memory content (unsaved editor
+ * buffers). When present, the override is used in place of the on-disk content
+ * so the preview reflects edits before they're saved.
  */
-export function scanContentRoot(root: string): VirtualFile[] {
+export function scanContentRoot(
+  root: string,
+  overrides: Record<string, string> = {},
+): VirtualFile[] {
   const files: VirtualFile[] = [];
   if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
     return files;
   }
+
+  const readContent = (abs: string): string | null =>
+    overrides[path.resolve(abs)] ?? safeRead(abs);
 
   const walk = (dir: string) => {
     let entries: fs.Dirent[];
@@ -70,7 +80,7 @@ export function scanContentRoot(root: string): VirtualFile[] {
       const relPath = path.relative(root, abs).split(path.sep).join('/');
 
       if (PAGE_EXTENSIONS.has(ext)) {
-        const raw = safeRead(abs);
+        const raw = readContent(abs);
         if (raw == null) continue;
         const parsed = safeParseFrontmatter(raw);
         const fm = parsed.data as Record<string, unknown>;
@@ -87,7 +97,7 @@ export function scanContentRoot(root: string): VirtualFile[] {
         };
         files.push({ type: 'page', path: relPath, absolutePath: abs, data });
       } else if (entry.name === 'meta.json' || entry.name === 'meta.jsonc') {
-        const raw = safeRead(abs);
+        const raw = readContent(abs);
         if (raw == null) continue;
         try {
           const data = JSON.parse(stripJsonComments(raw));

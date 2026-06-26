@@ -16,8 +16,11 @@ let currentRoot: string | undefined;
 let currentFile: string | undefined;
 let scrollDebounce: ReturnType<typeof setTimeout> | undefined;
 let reloadDebounce: ReturnType<typeof setTimeout> | undefined;
+let liveDebounce: ReturnType<typeof setTimeout> | undefined;
 let contentWatcher: vscode.FileSystemWatcher | undefined;
 let watchedRoot: string | undefined;
+/** Unsaved buffer contents (abs path -> text) pushed to the live preview. */
+const overrides = new Map<string, string>();
 
 export function activate(context: vscode.ExtensionContext): void {
   output = vscode.window.createOutputChannel("Fumadocs Preview");
@@ -44,7 +47,15 @@ export function activate(context: vscode.ExtensionContext): void {
       componentLensProvider,
     ),
     vscode.workspace.onDidChangeTextDocument((event) => {
-      if (isMarkdown(event.document)) refreshComponentLenses();
+      const doc = event.document;
+      if (isMarkdown(doc)) refreshComponentLenses();
+      // Mirror unsaved edits into the preview without waiting for a save.
+      if (!PreviewPanel.exists || !currentRoot) return;
+      if (!isOverridable(doc)) return;
+      const file = doc.uri.fsPath;
+      if (!file.startsWith(currentRoot)) return;
+      overrides.set(path.resolve(file), doc.getText());
+      scheduleLiveUpdate();
     }),
     vscode.commands.registerCommand(
       "fumadocs.openPreview",
@@ -65,11 +76,20 @@ export function activate(context: vscode.ExtensionContext): void {
       syncScrollToCursor(event.textEditor);
     }),
     vscode.workspace.onDidSaveTextDocument((doc) => {
+      // Disk now matches the buffer — drop the override and render from disk.
+      const file = path.resolve(doc.uri.fsPath);
+      if (overrides.delete(file)) refreshOverrides();
       if (!PreviewPanel.exists || !currentRoot) return;
-      const file = doc.uri.fsPath;
-      if (file.startsWith(currentRoot) || isMarkdown(doc)) {
+      if (doc.uri.fsPath.startsWith(currentRoot) || isMarkdown(doc)) {
         scheduleReload();
       }
+    }),
+    vscode.workspace.onDidCloseTextDocument((doc) => {
+      // A closed (possibly reverted) buffer should no longer override disk.
+      const file = path.resolve(doc.uri.fsPath);
+      if (!overrides.delete(file)) return;
+      refreshOverrides();
+      scheduleReload();
     }),
     vscode.workspace.onDidOpenTextDocument((doc) => {
       if (isMarkdown(doc)) codeLensProvider.refresh();
@@ -88,6 +108,7 @@ export function deactivate(): void {
   watchedRoot = undefined;
   if (scrollDebounce) clearTimeout(scrollDebounce);
   if (reloadDebounce) clearTimeout(reloadDebounce);
+  if (liveDebounce) clearTimeout(liveDebounce);
 }
 
 /**
@@ -123,6 +144,47 @@ function scheduleReload(): void {
     if (!PreviewPanel.exists) return;
     PreviewPanel.createOrShow().reload();
   }, 120);
+}
+
+/** Capture any already-open dirty buffers under `root` as overrides. */
+function seedOverridesFromOpenDocs(root: string): void {
+  for (const doc of vscode.workspace.textDocuments) {
+    if (!doc.isDirty || !isOverridable(doc)) continue;
+    const file = doc.uri.fsPath;
+    if (!file.startsWith(root)) continue;
+    overrides.set(path.resolve(file), doc.getText());
+  }
+}
+
+/** Whether a document's unsaved content should be mirrored into the preview. */
+function isOverridable(doc: vscode.TextDocument): boolean {
+  if (isMarkdown(doc)) return true;
+  const base = path.basename(doc.uri.fsPath);
+  return base === "meta.json" || base === "meta.jsonc";
+}
+
+/** Push the current override set (scoped to the active root) to the renderer. */
+function refreshOverrides(): void {
+  const scoped: Record<string, string> = {};
+  if (currentRoot) {
+    for (const [file, content] of overrides) {
+      if (file.startsWith(currentRoot)) scoped[file] = content;
+    }
+  }
+  manager.setOverrides(scoped);
+}
+
+/**
+ * Debounced live update: persist unsaved buffers, then soft-refresh. Writing
+ * the state synchronously before the reload guarantees the renderer sees the
+ * latest content on the refresh that follows.
+ */
+function scheduleLiveUpdate(): void {
+  if (liveDebounce) clearTimeout(liveDebounce);
+  liveDebounce = setTimeout(() => {
+    refreshOverrides();
+    if (PreviewPanel.exists) PreviewPanel.createOrShow().reload();
+  }, 150);
 }
 
 /** Debounced sync of the editor's cursor line into the preview. */
@@ -191,6 +253,7 @@ async function updatePreviewFor(filePath: string): Promise<void> {
   currentRoot = root;
   currentFile = filePath;
   watchContentRoot(root);
+  seedOverridesFromOpenDocs(root);
   const slug = computeSlugPath(root, filePath);
   const route = slug === "/" ? "/" : slug;
 
@@ -199,6 +262,8 @@ async function updatePreviewFor(filePath: string): Promise<void> {
     const baseUrl = await manager.ensure(root, (phase) =>
       panel.showProgress(route, phase),
     );
+    // Persist any already-dirty buffers now that the server root is set.
+    refreshOverrides();
     panel.showProgress(route, "Loading page…");
     panel.navigate(baseUrl, slug, path.basename(filePath));
     // Seed the cursor line so the freshly loaded page scrolls to where the

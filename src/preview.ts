@@ -274,10 +274,7 @@ export class PreviewPanel {
     let currentUrl = '';
     // Most recent editor cursor line; replayed once the iframe is ready.
     let pendingScrollLine = null;
-    // Last scroll anchor reported by the page, restored after a live-reload.
-    let lastAnchor = null;
-    // What to do once the (re)loaded page signals it's ready.
-    let pageMode = 'navigate'; // 'navigate' | 'reload'
+    // Whether the current page has signaled it's mounted (ScrollSync ready).
     let readyHandled = false;
 
     function forwardScroll() {
@@ -288,20 +285,11 @@ export class PreviewPanel {
       );
     }
 
-    function restoreScroll() {
-      if (lastAnchor == null || !frame.contentWindow) return;
-      frame.contentWindow.postMessage(
-        { type: 'fumadocs:restoreScroll', anchor: lastAnchor },
-        '*',
-      );
-    }
-
-    // Run once per (re)load: keep your place on reload, jump to cursor on nav.
+    // Run once per navigation: jump to the editor's cursor line.
     function handleReady() {
       if (readyHandled) return;
       readyHandled = true;
-      if (pageMode === 'reload' && lastAnchor != null) restoreScroll();
-      else forwardScroll();
+      forwardScroll();
     }
 
     // Fallback for pages that don't emit 'fumadocs:ready'.
@@ -311,9 +299,7 @@ export class PreviewPanel {
 
     function showFrame(url) {
       currentUrl = url;
-      pageMode = 'navigate';
       readyHandled = false;
-      lastAnchor = null;
       frame.src = url;
       frame.style.display = 'block';
       progress.classList.remove('visible');
@@ -365,20 +351,21 @@ export class PreviewPanel {
         handleReady();
         return;
       }
-      if (msg.type === 'fumadocs:anchor') {
-        lastAnchor = msg.anchor;
-        return;
-      }
       if (msg.type === 'navigate') {
         // Always bust the cache so the renderer re-reads the active root and
         // the iframe reloads even when two roots share the same slug.
         showFrame(withNonce(msg.url));
       } else if (msg.type === 'reload') {
         if (!currentUrl) return;
-        // Keep the last anchor so we can restore the reader's place.
-        pageMode = 'reload';
-        readyHandled = false;
-        frame.src = withNonce(currentUrl);
+        if (readyHandled && frame.contentWindow) {
+          // Soft refresh in place: the force-dynamic route re-reads disk and
+          // React reconciles the DOM, so scroll position is preserved.
+          frame.contentWindow.postMessage({ type: 'fumadocs:refresh' }, '*');
+        } else {
+          // Page never finished loading — fall back to a full reload.
+          readyHandled = false;
+          frame.src = withNonce(currentUrl);
+        }
       } else if (msg.type === 'progress') {
         showProgress(msg.route, msg.phase);
       } else if (msg.type === 'error') {

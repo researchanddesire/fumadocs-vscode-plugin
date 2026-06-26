@@ -4,13 +4,28 @@ import { openAddImageFlow } from "./imageDialog";
 import { insertBlockBelowCursor } from "./insertAtCursor";
 import { getDocsToolsContext } from "./state";
 
+/** The component block currently being built/edited live in the document. */
+interface ComponentSession {
+  uri: vscode.Uri;
+  /** Current span of the block in the document, kept in sync on every apply. */
+  range: vscode.Range;
+  mode: "edit" | "insert";
+  /** Original block text for edit-mode revert; null for insert mode. */
+  originalText: string | null;
+}
+
 export class DocsToolsViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "fumadocs.docsTools";
 
   private view: vscode.WebviewView | undefined;
   private pendingBuilderId: string | undefined;
   private pendingEdit: { id: string; text: string } | undefined;
-  private editTarget: { uri: vscode.Uri; range: vscode.Range } | undefined;
+  /** Live-edit session for the component currently open in the builder. */
+  private session: ComponentSession | undefined;
+  /** Editor captured when an insert-mode builder opens (before the block exists). */
+  private pendingInsertEditor: vscode.TextEditor | undefined;
+  /** Serializes document edits so debounced applies never interleave. */
+  private queue: Promise<void> = Promise.resolve();
 
   resolveWebviewView(
     webviewView: vscode.WebviewView,
@@ -26,15 +41,14 @@ export class DocsToolsViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.html = sidebarHtml();
 
     webviewView.webview.onDidReceiveMessage(
-      (msg: { type?: string; id?: string; text?: string }) => {
+      (msg: { type?: string; id?: string; text?: string; mode?: string }) => {
         if (msg.type === "addImage") void openAddImageFlow();
         if (msg.type === "insertComponent" && msg.id) void insertComponent(msg.id);
-        if (msg.type === "insertText" && typeof msg.text === "string") {
-          void insertText(msg.text);
+        if (msg.type === "liveApply" && typeof msg.text === "string") {
+          this.enqueueLiveApply(msg.text, msg.mode === "edit" ? "edit" : "insert");
         }
-        if (msg.type === "replaceComponent" && typeof msg.text === "string") {
-          void this.applyComponentEdit(msg.text);
-        }
+        if (msg.type === "cancelEdit") this.enqueueCancel();
+        if (msg.type === "finishEdit") this.enqueueFinish();
         if (msg.type === "refresh") {
           this.pushState();
           this.flushBuilder();
@@ -57,16 +71,20 @@ export class DocsToolsViewProvider implements vscode.WebviewViewProvider {
     this.pushState();
   }
 
-  /** Reveal the sidebar and open the builder overlay for `id`. */
+  /** Reveal the sidebar and open the builder overlay for `id` (insert mode). */
   openBuilder(id: string): void {
     this.pendingBuilderId = id;
+    // Capture the editor now: the block is inserted into it on the first apply.
+    this.pendingInsertEditor = vscode.window.activeTextEditor;
+    this.session = undefined;
     void vscode.commands.executeCommand("fumadocs.docsTools.focus");
     this.flushBuilder();
   }
 
   /**
    * Reveal the sidebar and open the builder pre-filled with an existing
-   * component's source. Saving replaces `range` in `uri` rather than inserting.
+   * component's source. Edits are applied live to `range` in `uri`; Cancel
+   * reverts to the original text.
    */
   openBuilderForEdit(
     uri: vscode.Uri,
@@ -74,7 +92,8 @@ export class DocsToolsViewProvider implements vscode.WebviewViewProvider {
     range: vscode.Range,
     text: string,
   ): void {
-    this.editTarget = { uri, range };
+    this.session = { uri, range, mode: "edit", originalText: text };
+    this.pendingInsertEditor = undefined;
     this.pendingEdit = { id, text };
     void vscode.commands.executeCommand("fumadocs.docsTools.focus");
     this.flushBuilder();
@@ -99,15 +118,68 @@ export class DocsToolsViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  /** Replace the component block being edited with the rebuilt markup. */
-  private async applyComponentEdit(text: string): Promise<void> {
-    const target = this.editTarget;
-    if (!target) return;
+  /** Queue a live apply of the rebuilt markup (debounced sender on the UI side). */
+  private enqueueLiveApply(text: string, mode: "edit" | "insert"): void {
+    this.queue = this.queue
+      .then(() => this.doLiveApply(text, mode))
+      .catch(() => undefined);
+  }
 
-    const edit = new vscode.WorkspaceEdit();
-    edit.replace(target.uri, target.range, text);
-    const ok = await vscode.workspace.applyEdit(edit);
-    if (ok) this.editTarget = undefined;
+  /** Queue a revert: restore the original text (edit) or remove the block (insert). */
+  private enqueueCancel(): void {
+    this.queue = this.queue.then(() => this.doCancel()).catch(() => undefined);
+  }
+
+  /** Queue finalization: keep the current content and end the session. */
+  private enqueueFinish(): void {
+    this.queue = this.queue
+      .then(() => {
+        this.session = undefined;
+        this.pendingInsertEditor = undefined;
+      })
+      .catch(() => undefined);
+  }
+
+  /**
+   * Apply the rebuilt component to the document. In insert mode the first apply
+   * drops the block at the cursor and starts the session; later applies (and all
+   * edit-mode applies) replace the tracked range in place.
+   */
+  private async doLiveApply(
+    text: string,
+    mode: "edit" | "insert",
+  ): Promise<void> {
+    if (mode === "insert" && !this.session) {
+      const editor = this.pendingInsertEditor ?? vscode.window.activeTextEditor;
+      if (!editor) return;
+      const inserted = await insertBlockBelowCursor(text, editor);
+      if (!inserted) return;
+      this.session = {
+        uri: editor.document.uri,
+        range: inserted.range,
+        mode: "insert",
+        originalText: null,
+      };
+      this.pendingInsertEditor = undefined;
+      return;
+    }
+
+    if (!this.session) return;
+    const next = await replaceRange(this.session.uri, this.session.range, text);
+    if (next) this.session.range = next;
+  }
+
+  private async doCancel(): Promise<void> {
+    const session = this.session;
+    this.session = undefined;
+    this.pendingInsertEditor = undefined;
+    if (!session) return;
+
+    if (session.mode === "edit" && session.originalText != null) {
+      await replaceRange(session.uri, session.range, session.originalText);
+    } else if (session.mode === "insert") {
+      await removeBlock(session.uri, session.range);
+    }
   }
 
   private pushState(): void {
@@ -143,13 +215,46 @@ async function insertComponent(id: string): Promise<void> {
   await insertBlockBelowCursor(component.snippet);
 }
 
-async function insertText(text: string): Promise<void> {
-  const ctx = getDocsToolsContext();
-  if (!ctx.enabled) {
-    void vscode.window.showWarningMessage(ctx.reason || "Docs tools are not available.");
-    return;
-  }
-  await insertBlockBelowCursor(text);
+/**
+ * Replace `range` in `uri` with `text` and return the new range the text
+ * occupies, so a live session can keep editing the same block.
+ */
+async function replaceRange(
+  uri: vscode.Uri,
+  range: vscode.Range,
+  text: string,
+): Promise<vscode.Range | null> {
+  const edit = new vscode.WorkspaceEdit();
+  edit.replace(uri, range, text);
+  const ok = await vscode.workspace.applyEdit(edit);
+  if (!ok) return null;
+
+  const lines = text.split("\n");
+  const endLine = range.start.line + lines.length - 1;
+  const endChar =
+    lines.length === 1
+      ? range.start.character + lines[0].length
+      : (lines.at(-1) ?? "").length;
+  return new vscode.Range(range.start, new vscode.Position(endLine, endChar));
+}
+
+/** Delete a block (plus one adjacent blank line) — used to undo a cancelled insert. */
+async function removeBlock(
+  uri: vscode.Uri,
+  range: vscode.Range,
+): Promise<void> {
+  const doc = await vscode.workspace.openTextDocument(uri);
+  let startLine = range.start.line;
+  const endLine = Math.min(range.end.line, doc.lineCount - 1);
+  if (startLine > 0 && doc.lineAt(startLine - 1).text.trim() === "") startLine--;
+  const start = new vscode.Position(startLine, 0);
+  const end =
+    endLine + 1 < doc.lineCount
+      ? new vscode.Position(endLine + 1, 0)
+      : doc.lineAt(endLine).range.end;
+  const edit = new vscode.WorkspaceEdit();
+  edit.delete(uri, new vscode.Range(start, end));
+  await vscode.workspace.applyEdit(edit);
 }
 
 interface ComponentQuickPickItem extends vscode.QuickPickItem {
@@ -496,7 +601,7 @@ function sidebarHtml(): string {
     </div>
     <div class="builder-foot">
       <button type="button" class="secondary" id="builderCancel">Cancel</button>
-      <button type="button" id="builderInsert">Insert below cursor</button>
+      <button type="button" id="builderInsert">Done</button>
     </div>
   </div>
 
@@ -872,6 +977,28 @@ function sidebarHtml(): string {
     }
   }
 
+  let liveTimer = null;
+
+  // Build the component markup from the current form state.
+  function buildText() {
+    if (!activeDef) return '';
+    try { return activeDef.build(collect()); } catch (err) { return ''; }
+  }
+
+  // Write the current component straight into the document.
+  function liveApplyNow() {
+    if (!activeDef) return;
+    const text = buildText();
+    if (!text.trim()) return;
+    vscode.postMessage({ type: 'liveApply', text: text, mode: editing ? 'edit' : 'insert' });
+  }
+
+  // Debounced live apply: keeps the file in sync as you edit fields.
+  function scheduleLiveApply() {
+    if (liveTimer) clearTimeout(liveTimer);
+    liveTimer = setTimeout(liveApplyNow, 200);
+  }
+
   // The render-box is re-filled on every update, so delegate clicks from the
   // stable container to keep the preview interactive.
   builderRender.addEventListener('click', function (e) {
@@ -907,8 +1034,8 @@ function sidebarHtml(): string {
       control.value = value || '';
       if (field.placeholder) control.placeholder = field.placeholder;
     }
-    control.addEventListener('input', function () { onInput(control.value); });
-    control.addEventListener('change', function () { onInput(control.value); });
+    control.addEventListener('input', function () { onInput(control.value); scheduleLiveApply(); });
+    control.addEventListener('change', function () { onInput(control.value); scheduleLiveApply(); });
     label.appendChild(control);
     return label;
   }
@@ -945,6 +1072,7 @@ function sidebarHtml(): string {
           items.splice(index, 1);
           renderItems();
           updatePreview();
+          scheduleLiveApply();
         });
         head.appendChild(remove);
         itemEl.appendChild(head);
@@ -971,6 +1099,7 @@ function sidebarHtml(): string {
       state.lists[listDef.key].push(blank);
       renderItems();
       updatePreview();
+      scheduleLiveApply();
     });
     wrap.appendChild(add);
     return wrap;
@@ -1007,7 +1136,8 @@ function sidebarHtml(): string {
     activeDef = def;
     builderTitle.textContent = (editing ? 'Edit ' : '') + def.title;
     builderDesc.textContent = def.description;
-    builderInsert.textContent = editing ? 'Save changes' : 'Insert below cursor';
+    // Changes are written live, so the primary action just closes the builder.
+    builderInsert.textContent = 'Done';
     previewUi = { tab: 0, codeTab: 0, open: { 0: true } };
     seedState(def, initial);
     renderForm(def);
@@ -1020,6 +1150,8 @@ function sidebarHtml(): string {
     if (!def) return;
     editing = false;
     showBuilder(def, null);
+    // Drop the default block into the document immediately; edits update it.
+    liveApplyNow();
   }
 
   function openBuilderEdit(id, text) {
@@ -1087,17 +1219,16 @@ function sidebarHtml(): string {
     if (addImageBtn.disabled) return;
     vscode.postMessage({ type: 'addImage' });
   });
-  builderCancel.addEventListener('click', closeBuilder);
+  builderCancel.addEventListener('click', function () {
+    if (liveTimer) { clearTimeout(liveTimer); liveTimer = null; }
+    vscode.postMessage({ type: 'cancelEdit' });
+    closeBuilder();
+  });
   builderInsert.addEventListener('click', function () {
-    if (!activeDef) return;
-    let text = '';
-    try {
-      text = activeDef.build(collect());
-    } catch (err) {
-      text = '';
-    }
-    if (!text.trim()) return;
-    vscode.postMessage({ type: editing ? 'replaceComponent' : 'insertText', text: text });
+    // Flush any pending change so the final state is written before finishing.
+    if (liveTimer) { clearTimeout(liveTimer); liveTimer = null; }
+    liveApplyNow();
+    vscode.postMessage({ type: 'finishEdit' });
     closeBuilder();
   });
 

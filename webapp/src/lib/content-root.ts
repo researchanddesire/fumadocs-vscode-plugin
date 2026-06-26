@@ -1,6 +1,45 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+/** Parsed shape of `.preview-state.json` written by the VSCode extension. */
+interface PreviewState {
+  /** Absolute content root, or null when unset. */
+  root: string | null;
+  /**
+   * Live-edit overrides: absolute file path -> unsaved editor buffer content.
+   * Lets the preview render in-editor changes before they're saved to disk.
+   */
+  overrides: Record<string, string>;
+}
+
+/**
+ * Read `.preview-state.json` fresh on every call (the page is force-dynamic).
+ * Tolerates a missing/invalid file by returning empty state.
+ */
+function readPreviewState(): PreviewState {
+  try {
+    const statePath = path.join(process.cwd(), '.preview-state.json');
+    const raw = fs.readFileSync(statePath, 'utf8');
+    const parsed = JSON.parse(raw) as { root?: unknown; overrides?: unknown };
+    const root =
+      typeof parsed.root === 'string' && parsed.root.trim().length > 0
+        ? parsed.root
+        : null;
+    const overrides: Record<string, string> = {};
+    if (parsed.overrides && typeof parsed.overrides === 'object') {
+      for (const [key, value] of Object.entries(
+        parsed.overrides as Record<string, unknown>,
+      )) {
+        if (typeof value === 'string') overrides[path.resolve(key)] = value;
+      }
+    }
+    return { root, overrides };
+  } catch {
+    // No/invalid state file — fall through to env/demo with no overrides.
+    return { root: null, overrides: {} };
+  }
+}
+
 /**
  * The absolute directory whose Markdown/MDX files we render.
  *
@@ -11,8 +50,8 @@ import path from 'node:path';
  *   3. a bundled demo directory (standalone `next dev`)
  */
 export function getContentRoot(): string {
-  const fromState = readStateRoot();
-  if (fromState) return path.resolve(fromState);
+  const { root } = readPreviewState();
+  if (root) return path.resolve(root);
 
   const env = process.env.FUMADOCS_CONTENT_ROOT;
   if (env && env.trim().length > 0) return path.resolve(env);
@@ -20,16 +59,10 @@ export function getContentRoot(): string {
   return path.join(process.cwd(), 'demo-content');
 }
 
-function readStateRoot(): string | null {
-  try {
-    const statePath = path.join(process.cwd(), '.preview-state.json');
-    const raw = fs.readFileSync(statePath, 'utf8');
-    const parsed = JSON.parse(raw) as { root?: unknown };
-    if (typeof parsed.root === 'string' && parsed.root.trim().length > 0) {
-      return parsed.root;
-    }
-  } catch {
-    // No/invalid state file — fall through to env/demo.
-  }
-  return null;
+/**
+ * Live-edit overrides keyed by absolute path. Empty when there are no dirty
+ * buffers (or when running standalone without the extension).
+ */
+export function getContentOverrides(): Record<string, string> {
+  return readPreviewState().overrides;
 }
