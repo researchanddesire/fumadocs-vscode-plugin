@@ -1,0 +1,115 @@
+---
+title: Kitchen Sink
+description: Single-page smoke test covering every Fumadocs rendering surface.
+---
+
+# Kitchen sink
+
+Everything on one page for a fast regression pass. If this renders correctly, individual component pages are likely fine too.
+
+<Banner id="kitchen-sink-banner">
+
+Kitchen sink page — dismissible banner at the top.
+
+</Banner>
+
+<Callout type="warn" title="Smoke test">
+
+Scan top-to-bottom once after changing the preview renderer or `getMDXComponents()`.
+
+</Callout>
+
+## Typography and markdown
+
+Paragraph with **bold**, *italic*, `inline code`, and a [relative link](/markdown).
+
+| Col A | Col B |
+| ----- | ----- |
+| one   | two   |
+
+> Blockquote for good measure.
+
+## Code
+
+```tsx title="example.tsx"
+export default function Page() {
+  return <main>Ohai</main>;
+}
+```
+
+<Tabs items={['npm', 'pnpm']}>
+  <Tab value="npm">
+
+```bash
+npm install
+```
+
+  </Tab>
+  <Tab value="pnpm">
+
+```bash
+pnpm install
+```
+
+  </Tab>
+</Tabs>
+
+## Components
+
+<Steps>
+<Step>
+
+### Step one
+
+First procedural block.
+
+</Step>
+<Step>
+
+### Step two
+
+Second procedural block.
+
+</Step>
+</Steps>
+
+<Cards>
+  <Card title="Home" href="/" />
+  <Card title="Callouts" href="/components/callouts" />
+</Cards>
+
+<Accordions>
+  <Accordion title="Accordion item">
+
+Collapsed content for accordion smoke test.
+
+  </Accordion>
+</Accordions>
+
+<TypeTable
+  type={{
+    id: {
+      type: 'string',
+      required: true,
+      description: 'Unique identifier.',
+    },
+  }}
+/>
+
+<Files>
+  <Folder name="src" defaultOpen>
+    <File name="index.ts" />
+  </Folder>
+</Files>
+
+<InlineTOC
+  items={[
+    { title: 'Typography and markdown', url: '#typography-and-markdown', depth: 2 },
+    { title: 'Code', url: '#code', depth: 2 },
+    { title: 'Components', url: '#components', depth: 2 },
+  ]}
+/>
+
+## Done
+
+If you reached this line with no MDX errors, the kitchen sink pass succeeded.

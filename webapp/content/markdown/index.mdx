@@ -1,0 +1,85 @@
+---
+title: Markdown
+description: Standard markdown elements rendered through Fumadocs default MDX components.
+---
+
+# Markdown rendering
+
+This page exercises plain markdown processed by Fumadocs default components (`Heading`, `Link`, `Image`, `Table`, etc.).
+
+## Headings
+
+Headings `h1`–`h6` use the Fumadocs `Heading` component with anchor links.
+
+### Heading level 3
+
+#### Heading level 4
+
+##### Heading level 5
+
+###### Heading level 6
+
+## Text formatting
+
+Regular paragraph text with **bold**, *italic*, ***bold italic***, ~~strikethrough~~, and `inline code`.
+
+A second paragraph with a [link to the home page](/) and an [external link](https://fumadocs.dev).
+
+## Lists
+
+Unordered list:
+
+- Alpha
+- Bravo
+  - Nested bravo-one
+  - Nested bravo-two
+- Charlie
+
+Ordered list:
+
+1. First step
+2. Second step
+3. Third step
+
+Task-style list (rendered as bullets unless a plugin adds checkboxes):
+
+- [ ] Todo item
+- [x] Done item
+
+## Blockquote
+
+> Docs are a love letter that you write to your future self.
+>
+> — Damian Conway (attributed)
+
+## Horizontal rule
+
+---
+
+## Table
+
+| Feature | Default component | Notes |
+| ------- | ----------------- | ----- |
+| Headings | `Heading` | Anchor links on hover |
+| Links | `fumadocs-core/link` | Internal + external |
+| Tables | Wrapped in scroll container | `prose-no-margin` |
+| Images | `fumadocs-core/framework` | Rounded corners |
+
+## Image
+
+![Placeholder landscape](https://picsum.photos/seed/docs-ohai/800/400)
+
+## Nested content
+
+<div className="rounded-lg border p-4">
+
+Markdown still works inside a JSX wrapper:
+
+- Item A
+- Item B
+
+</div>
+
+## Definition-style emphasis
+
+Use keyboard hints like `Ctrl` + `S` and file names like `content/index.mdx` inline.

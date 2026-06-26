@@ -1,0 +1,78 @@
+---
+title: Callouts
+description: Callout, CalloutTitle, and CalloutDescription variants.
+---
+
+# Callouts
+
+`Callout` ships in `fumadocs-ui/mdx` default components. Compound parts (`CalloutTitle`, `CalloutDescription`) are also available.
+
+## Default (info)
+
+<Callout>
+
+This is the default info callout with no explicit `type`.
+
+</Callout>
+
+## Typed callouts
+
+<Callout type="info" title="Info">
+
+Use for neutral guidance and supplementary context.
+
+</Callout>
+
+<Callout type="warn" title="Warning">
+
+Use for behavior that may surprise users or cause data loss.
+
+</Callout>
+
+<Callout type="error" title="Error">
+
+Use for hard failures, broken prerequisites, or destructive outcomes.
+
+</Callout>
+
+<Callout type="success" title="Success">
+
+Use when confirming a completed action or valid configuration.
+
+</Callout>
+
+<Callout type="idea" title="Idea">
+
+Use for tips, suggestions, or optional improvements.
+
+</Callout>
+
+## Alias type
+
+<Callout type="warning" title="warning alias">
+
+The `warning` type is an alias of `warn`.
+
+</Callout>
+
+## Compound structure
+
+<Callout type="info">
+  <CalloutTitle>Structured callout</CalloutTitle>
+  <CalloutDescription>
+    Split title and body when you need tighter typography control inside a single callout.
+  </CalloutDescription>
+</Callout>
+
+## With markdown inside
+
+<Callout title="Markdown inside callouts">
+
+- List item one
+- List item two
+
+```ts
+const preview = true;
+```
+
+</Callout>

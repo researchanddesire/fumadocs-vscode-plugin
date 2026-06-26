@@ -1,0 +1,110 @@
+---
+title: Tabs
+description: Tabs and Tab for grouped content with optional persistence.
+---
+
+# Tabs
+
+`Tabs` and `Tab` are injected globally by the preview app (imports stripped at compile time).
+
+## Simple items API
+
+<Tabs items={['Overview', 'API', 'Examples']}>
+  <Tab value="Overview">
+
+### Overview
+
+High-level summary of the feature. Tabs should switch without a full page reload.
+
+  </Tab>
+  <Tab value="API">
+
+### API
+
+Document endpoints, props, or configuration keys here.
+
+  </Tab>
+  <Tab value="Examples">
+
+### Examples
+
+```tsx
+<Tabs items={['A', 'B']}>
+  <Tab value="A">Content A</Tab>
+  <Tab value="B">Content B</Tab>
+</Tabs>
+```
+
+  </Tab>
+</Tabs>
+
+## Package manager pattern
+
+<Tabs items={['npm', 'pnpm', 'yarn']}>
+  <Tab value="npm">
+
+```bash
+npm install ohai
+```
+
+  </Tab>
+  <Tab value="pnpm">
+
+```bash
+pnpm add ohai
+```
+
+  </Tab>
+  <Tab value="yarn">
+
+```bash
+yarn add ohai
+```
+
+  </Tab>
+</Tabs>
+
+## Shared group (session persistence)
+
+<Tabs groupId="package-manager" items={['npm', 'pnpm']}>
+  <Tab value="npm">
+
+```bash
+npm install alpha
+```
+
+  </Tab>
+  <Tab value="pnpm">
+
+```bash
+pnpm add alpha
+```
+
+  </Tab>
+</Tabs>
+
+<Tabs groupId="package-manager" items={['npm', 'pnpm']}>
+  <Tab value="npm">
+
+```bash
+npm install beta
+```
+
+  </Tab>
+  <Tab value="pnpm">
+
+```bash
+pnpm add beta
+```
+
+  </Tab>
+</Tabs>
+
+Selecting a tab in one block should sync the other block above (same `groupId`).
+
+## Default index
+
+<Tabs items={['First', 'Second']} defaultIndex={1}>
+  <Tab value="First">This tab is not selected by default.</Tab>
+  <Tab value="Second">This tab **is** selected by default (`defaultIndex={1}`).</Tab>
+</Tabs>

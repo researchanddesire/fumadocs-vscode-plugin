@@ -1,0 +1,75 @@
+---
+title: Steps
+description: Steps and Step for numbered procedural content.
+---
+
+# Steps
+
+Use `Steps` / `Step` for tutorials and setup guides.
+
+## Component API
+
+<Steps>
+<Step>
+
+### Install dependencies
+
+```bash
+pnpm install
+```
+
+Make sure Node 22+ is active (`node -v`).
+
+</Step>
+
+<Step>
+
+### Configure environment
+
+Copy `.env.example` to `.env.local` and fill in Supabase keys.
+
+</Step>
+
+<Step>
+
+### Start the preview
+
+Run **Fumadocs: Open Preview** from the command palette while editing any file in this content root.
+
+</Step>
+</Steps>
+
+## Tailwind utility alternative
+
+Fumadocs also supports step styling via utilities (no imports required):
+
+<div className="fd-steps">
+  <div className="fd-step">
+
+### Utility-based step one
+
+Content for the first utility step.
+
+  </div>
+  <div className="fd-step">
+
+### Utility-based step two
+
+Content for the second utility step.
+
+  </div>
+</div>
+
+## Headings-only variant
+
+<div className="fd-steps [&_h3]:fd-step">
+
+### Only this heading is a step
+
+Body text stays outside the step marker styling.
+
+### Another step heading
+
+Second step with the arbitrary variant selector.
+
+</div>

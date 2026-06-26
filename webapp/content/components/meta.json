@@ -1,0 +1,14 @@
+{
+  "title": "Components",
+  "pages": [
+    "callouts",
+    "tabs",
+    "steps",
+    "cards",
+    "accordions",
+    "type-table",
+    "files",
+    "banner",
+    "inline-toc"
+  ]
+}

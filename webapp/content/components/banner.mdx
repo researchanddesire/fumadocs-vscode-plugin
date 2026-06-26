@@ -1,0 +1,44 @@
+---
+title: Banner
+description: Banner component for announcements and promos.
+---
+
+# Banner
+
+`Banner` renders a dismissible announcement strip. It can adjust layout spacing when `changeLayout` is true (default).
+
+<Banner id="docs-ohai-preview-banner">
+
+**Preview mode** — You are viewing test content for the Fumadocs VS Code extension.
+
+</Banner>
+
+## Normal variant (explicit)
+
+<Banner id="docs-ohai-normal-banner" variant="normal">
+
+Normal banner with default styling. Dismiss state persists via the banner `id`.
+
+</Banner>
+
+## Rainbow variant
+
+<Banner
+  id="docs-ohai-rainbow-banner"
+  variant="rainbow"
+  rainbowColors={['#ff6b6b', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff']}
+>
+
+Rainbow gradient banner — useful for launch announcements.
+
+</Banner>
+
+<Callout type="info">
+
+Banners affect page layout when `changeLayout` is enabled. Scroll this page to confirm spacing above the main docs content looks correct with multiple banners present.
+
+</Callout>
+
+## Content below banners
+
+This paragraph should appear below the banner stack with readable spacing. If banners overlap the sidebar or title, layout integration needs attention.

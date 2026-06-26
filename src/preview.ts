@@ -1,298 +1,322 @@
 import * as vscode from "vscode";
-import * as path from "node:path";
-import { renderMdx, addChildToContainer } from "./render/mdxToHtml";
 
-interface ReplaceMessage {
-  type: "live" | "apply";
-  start: number;
-  end: number;
-  text: string;
-}
+/**
+ * A single reusable side-by-side webview that embeds the running Fumadocs
+ * preview server in an iframe.
+ */
+export class PreviewPanel {
+  private static current: PreviewPanel | undefined;
+  private readonly panel: vscode.WebviewPanel;
+  private disposables: vscode.Disposable[] = [];
+  private onDisposeCb: (() => void) | undefined;
+  private currentUrl = "";
 
-interface AddItemMessage {
-  type: "addItem";
-  start: number;
-  end: number;
-  name: string;
-}
-
-interface LifecycleMessage {
-  type: "editStart" | "editEnd";
-}
-
-type WebviewMessage = ReplaceMessage | AddItemMessage | LifecycleMessage;
-
-const isPreviewable = (document: vscode.TextDocument): boolean =>
-  document.languageId === "mdx" ||
-  document.languageId === "markdown" ||
-  document.fileName.endsWith(".mdx");
-
-const nonce = (): string => {
-  const chars =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  let value = "";
-  for (let i = 0; i < 32; i++) {
-    value += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return value;
-};
-
-class PreviewManager {
-  private panel: vscode.WebviewPanel | undefined;
-  private trackedUri: vscode.Uri | undefined;
-  private debounce: NodeJS.Timeout | undefined;
-  /** True while an inline editor is open in the webview; blocks all re-renders. */
-  private editing = false;
-  /** The webview shell is only written once; updates are patched in place. */
-  private initialized = false;
-  private readonly disposables: vscode.Disposable[] = [];
-
-  constructor(private readonly extensionUri: vscode.Uri) {}
-
-  open(): void {
-    const editor = vscode.window.activeTextEditor;
-    if (!editor || !isPreviewable(editor.document)) {
-      void vscode.window.showWarningMessage(
-        "Open an MDX or Markdown file to preview it.",
-      );
-      return;
-    }
-
-    if (this.panel) {
-      this.panel.reveal(vscode.ViewColumn.Beside, true);
-    } else {
-      this.panel = vscode.window.createWebviewPanel(
-        "fumadocsPreview",
-        "Fumadocs Preview",
-        { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
-        {
-          enableScripts: true,
-          retainContextWhenHidden: true,
-          localResourceRoots: this.resourceRoots(editor.document.uri),
-        },
-      );
-
-      this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
-      this.panel.webview.onDidReceiveMessage(
-        (message: WebviewMessage) => this.handleMessage(message),
-        null,
-        this.disposables,
-      );
-      this.registerListeners();
-    }
-
-    this.track(editor.document);
+  static get currentUrl(): string | undefined {
+    return PreviewPanel.current?.currentUrl || undefined;
   }
 
-  private get trackedDocument(): vscode.TextDocument | undefined {
-    if (!this.trackedUri) {
-      return undefined;
+  static createOrShow(): PreviewPanel {
+    if (PreviewPanel.current) {
+      PreviewPanel.current.panel.reveal(vscode.ViewColumn.Beside, true);
+      return PreviewPanel.current;
     }
-    return vscode.workspace.textDocuments.find(
-      (doc) => doc.uri.toString() === this.trackedUri?.toString(),
-    );
-  }
-
-  private async handleMessage(message: WebviewMessage): Promise<void> {
-    const document = this.trackedDocument;
-    if (!document) {
-      return;
-    }
-
-    if (message.type === "editStart") {
-      // Lock rendering so the open inline editor is never clobbered.
-      this.editing = true;
-      if (this.debounce) {
-        clearTimeout(this.debounce);
-        this.debounce = undefined;
-      }
-      return;
-    }
-
-    if (message.type === "editEnd") {
-      this.editing = false;
-      this.render(document);
-      return;
-    }
-
-    if (message.type === "addItem") {
-      await this.addItem(document, message);
-      return;
-    }
-
-    if (message.type === "live" || message.type === "apply") {
-      const range = new vscode.Range(
-        document.positionAt(message.start),
-        document.positionAt(message.end),
-      );
-      const edit = new vscode.WorkspaceEdit();
-      edit.replace(document.uri, range, message.text);
-      await vscode.workspace.applyEdit(edit);
-      // "live" edits keep the in-place textarea open, so we never re-render here
-      // (the editing lock already blocks the resulting document-change render).
-      if (message.type === "apply") {
-        this.render(document);
-      }
-    }
-  }
-
-  private async addItem(
-    document: vscode.TextDocument,
-    message: AddItemMessage,
-  ): Promise<void> {
-    const range = new vscode.Range(
-      document.positionAt(message.start),
-      document.positionAt(message.end),
-    );
-    const source = document.getText(range);
-    const updated = addChildToContainer(source, message.name);
-    if (updated === null) {
-      return;
-    }
-    const edit = new vscode.WorkspaceEdit();
-    edit.replace(document.uri, range, updated);
-    await vscode.workspace.applyEdit(edit);
-    this.render(document);
-  }
-
-  private resourceRoots(docUri: vscode.Uri): vscode.Uri[] {
-    const roots = [vscode.Uri.joinPath(this.extensionUri, "media")];
-    const folder = vscode.Uri.file(path.dirname(docUri.fsPath));
-    roots.push(folder);
-    const workspace = vscode.workspace.getWorkspaceFolder(docUri);
-    if (workspace) {
-      roots.push(workspace.uri);
-    }
-    return roots;
-  }
-
-  private registerListeners(): void {
-    this.disposables.push(
-      vscode.workspace.onDidChangeTextDocument((event) => {
-        if (
-          !this.trackedUri ||
-          event.document.uri.toString() !== this.trackedUri.toString()
-        ) {
-          return;
-        }
-        // While an inline editor is open, the webview owns the document; don't
-        // re-render or we'd discard the editor and the user's focus/caret.
-        if (this.editing) {
-          return;
-        }
-        this.scheduleRender(event.document);
-      }),
-      vscode.window.onDidChangeActiveTextEditor((editor) => {
-        // Don't switch the tracked document out from under an open inline editor.
-        if (!this.editing && editor && isPreviewable(editor.document)) {
-          this.track(editor.document);
-        }
-      }),
-    );
-  }
-
-  private track(document: vscode.TextDocument): void {
-    // Switching to a different file needs a fresh shell (resource roots change).
-    if (this.trackedUri?.toString() !== document.uri.toString()) {
-      this.initialized = false;
-    }
-    this.trackedUri = document.uri;
-    if (this.panel) {
-      this.panel.title = `Preview: ${path.basename(document.fileName)}`;
-      this.panel.webview.options = {
+    const panel = vscode.window.createWebviewPanel(
+      "fumadocs.preview",
+      "Fumadocs Preview",
+      { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
+      {
         enableScripts: true,
-        localResourceRoots: this.resourceRoots(document.uri),
-      };
-    }
-    this.render(document);
-  }
-
-  private scheduleRender(document: vscode.TextDocument): void {
-    if (this.debounce) {
-      clearTimeout(this.debounce);
-    }
-    this.debounce = setTimeout(() => this.render(document), 150);
-  }
-
-  private render(document: vscode.TextDocument): void {
-    if (!this.panel || this.editing) {
-      return;
-    }
-
-    const webview = this.panel.webview;
-    const docDir = path.dirname(document.uri.fsPath);
-
-    const resolveImage = (src: string): string => {
-      if (/^(https?:)?\/\//.test(src) || src.startsWith("data:")) {
-        return src;
-      }
-      const target = path.isAbsolute(src)
-        ? src
-        : path.resolve(docDir, src.replace(/^\.\//, ""));
-      return webview.asWebviewUri(vscode.Uri.file(target)).toString();
-    };
-
-    const { html } = renderMdx(document.getText(), resolveImage);
-
-    if (this.initialized) {
-      // Patch the content in place so the webview never reloads (keeps scroll,
-      // focus, and client state intact).
-      void this.panel.webview.postMessage({ type: "update", html });
-    } else {
-      this.panel.webview.html = this.wrap(webview, html);
-      this.initialized = true;
-    }
-  }
-
-  private wrap(webview: vscode.Webview, bodyHtml: string): string {
-    const cssUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this.extensionUri, "media", "preview.css"),
+        retainContextWhenHidden: true,
+        localResourceRoots: [],
+      },
     );
-    const scriptUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this.extensionUri, "media", "preview.js"),
-    );
-    const cspSource = webview.cspSource;
-    const n = nonce();
+    PreviewPanel.current = new PreviewPanel(panel);
+    void vscode.commands.executeCommand("setContext", "fumadocs.previewActive", true);
+    return PreviewPanel.current;
+  }
 
-    return `<!DOCTYPE html>
+  static get exists(): boolean {
+    return PreviewPanel.current !== undefined;
+  }
+
+  private constructor(panel: vscode.WebviewPanel) {
+    this.panel = panel;
+    this.panel.webview.html = this.shellHtml();
+    this.panel.webview.onDidReceiveMessage(
+      (msg: { type?: string }) => {
+        if (msg.type === "openExternal") {
+          const url = PreviewPanel.currentUrl;
+          if (url) void vscode.env.openExternal(vscode.Uri.parse(url));
+        }
+      },
+      undefined,
+      this.disposables,
+    );
+    this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
+  }
+
+  onDidDispose(cb: () => void): void {
+    this.onDisposeCb = cb;
+  }
+
+  /** Point the iframe at `baseUrl + slugPath`, optionally setting the title. */
+  navigate(baseUrl: string, slugPath: string, title?: string): void {
+    const url = `${baseUrl}${slugPath}`;
+    this.currentUrl = url;
+    if (title) this.panel.title = `Preview: ${title}`;
+    void this.panel.webview.postMessage({ type: "navigate", url });
+  }
+
+  /** Force the iframe to reload its current page (after a save). */
+  reload(): void {
+    void this.panel.webview.postMessage({ type: "reload" });
+  }
+
+  /** Show the in-progress view: which route is loading and the current phase. */
+  showProgress(route: string, phase: string): void {
+    void this.panel.webview.postMessage({ type: "progress", route, phase });
+  }
+
+  /** Show a failure with a collapsible dropdown of debugging logs. */
+  showError(route: string, message: string, logs: string): void {
+    void this.panel.webview.postMessage({ type: "error", route, message, logs });
+  }
+
+  private shellHtml(): string {
+    const csp = [
+      "default-src 'none'",
+      "style-src 'unsafe-inline'",
+      "script-src 'unsafe-inline'",
+      "frame-src http://127.0.0.1:* http://localhost:*",
+      "img-src http://127.0.0.1:* http://localhost:* data:",
+    ].join("; ");
+
+    return /* html */ `<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${cspSource} https: data:; style-src ${cspSource} 'unsafe-inline'; script-src 'nonce-${n}';" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <link href="${cssUri}" rel="stylesheet" />
-  <title>Fumadocs Preview</title>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="${csp}" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<style>
+  html, body { height: 100%; margin: 0; padding: 0; background: var(--vscode-editor-background); }
+  body {
+    font-family: var(--vscode-font-family);
+    color: var(--vscode-foreground);
+    display: flex;
+    flex-direction: column;
+  }
+  .toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 12px;
+    background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
+    border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35));
+    flex-shrink: 0;
+  }
+  .toolbar-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--vscode-descriptionForeground);
+  }
+  .toolbar-actions { display: flex; align-items: center; gap: 8px; }
+  .toolbar-btn {
+    appearance: none;
+    border: 1px solid var(--vscode-button-border, transparent);
+    border-radius: 4px;
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1;
+    padding: 7px 12px;
+  }
+  .toolbar-btn:hover {
+    background: var(--vscode-button-hoverBackground);
+  }
+  .toolbar-btn:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: 2px;
+  }
+  .preview-shell {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+  }
+  .overlay {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    padding: 24px;
+    text-align: center;
+    position: absolute;
+    inset: 0;
+  }
+  .overlay.visible { display: flex; }
+  .spinner {
+    width: 22px; height: 22px; margin-bottom: 14px;
+    border: 2px solid var(--vscode-descriptionForeground);
+    border-top-color: transparent; border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .route {
+    font-size: 12px; opacity: 0.8; margin-bottom: 4px;
+    font-family: var(--vscode-editor-font-family, monospace);
+  }
+  #progress .phase { font-size: 13px; color: var(--vscode-descriptionForeground); }
+
+  #error { color: var(--vscode-foreground); }
+  #error .badge {
+    color: var(--vscode-errorForeground); font-weight: 600; font-size: 13px; margin-bottom: 8px;
+  }
+  #error .message {
+    max-width: 560px; font-size: 13px; line-height: 1.5; margin-bottom: 16px;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  #error details {
+    width: 100%; max-width: 720px; text-align: left;
+    border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35));
+    border-radius: 6px; background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.1));
+  }
+  #error summary {
+    cursor: pointer; user-select: none; padding: 8px 12px; font-size: 12px;
+    color: var(--vscode-descriptionForeground); outline: none;
+  }
+  #error summary:hover { color: var(--vscode-foreground); }
+  #error pre {
+    margin: 0; padding: 12px; max-height: 320px; overflow: auto;
+    border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35));
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+    color: var(--vscode-descriptionForeground);
+  }
+  #error .empty-logs { padding: 12px; font-size: 12px; color: var(--vscode-descriptionForeground); }
+  iframe {
+    border: 0;
+    width: 100%;
+    height: 100%;
+    display: none;
+    background: #fff;
+    position: absolute;
+    inset: 0;
+  }
+</style>
 </head>
 <body>
-  <div class="fd-preview-banner">Click any block to edit it. Use the buttons to convert Markdown to components or add more items.</div>
-  <article class="fd-content">
-    ${bodyHtml}
-  </article>
-  <script nonce="${n}" src="${scriptUri}"></script>
+  <div class="toolbar">
+    <span class="toolbar-label">Fumadocs Preview</span>
+    <div class="toolbar-actions">
+      <button class="toolbar-btn" id="open-browser" type="button" title="Open this page in your default browser">
+        Open in Browser ↗
+      </button>
+    </div>
+  </div>
+
+  <div class="preview-shell">
+  <div id="progress" class="overlay visible">
+    <div class="spinner"></div>
+    <div class="route" id="progress-route">&nbsp;</div>
+    <div class="phase" id="progress-phase">Starting Fumadocs preview…</div>
+  </div>
+
+  <div id="error" class="overlay">
+    <div class="badge">Fumadocs preview failed</div>
+    <div class="route" id="error-route">&nbsp;</div>
+    <div class="message" id="error-message"></div>
+    <details>
+      <summary>Show debugging logs</summary>
+      <pre id="error-logs"></pre>
+    </details>
+  </div>
+
+  <iframe id="frame" title="Fumadocs Preview"></iframe>
+  </div>
+  <script>
+    const vscodeApi = acquireVsCodeApi();
+    const frame = document.getElementById('frame');
+    const openBrowserBtn = document.getElementById('open-browser');
+    const progress = document.getElementById('progress');
+    const progressRoute = document.getElementById('progress-route');
+    const progressPhase = document.getElementById('progress-phase');
+    const errorBox = document.getElementById('error');
+    const errorRoute = document.getElementById('error-route');
+    const errorMessage = document.getElementById('error-message');
+    const errorLogs = document.getElementById('error-logs');
+    let currentUrl = '';
+
+    function showFrame(url) {
+      currentUrl = url;
+      frame.src = url;
+      frame.style.display = 'block';
+      progress.classList.remove('visible');
+      errorBox.classList.remove('visible');
+    }
+
+    function showProgress(route, phase) {
+      progressRoute.textContent = route ? 'Route: ' + route : '';
+      progressPhase.textContent = phase || 'Starting Fumadocs preview…';
+      errorBox.classList.remove('visible');
+      frame.style.display = 'none';
+      progress.classList.add('visible');
+    }
+
+    function showError(route, message, logs) {
+      errorRoute.textContent = route ? 'Route: ' + route : '';
+      errorMessage.textContent = message || 'Unknown error.';
+      errorLogs.textContent = logs && logs.trim().length
+        ? logs
+        : 'No logs were captured.';
+      progress.classList.remove('visible');
+      frame.style.display = 'none';
+      errorBox.classList.add('visible');
+    }
+
+    function withNonce(url) {
+      const u = new URL(url);
+      u.searchParams.set('__fd', String(Date.now()));
+      return u.toString();
+    }
+
+    openBrowserBtn.addEventListener('click', () => {
+      vscodeApi.postMessage({ type: 'openExternal' });
+    });
+
+    window.addEventListener('message', (event) => {
+      const msg = event.data;
+      if (!msg) return;
+      if (msg.type === 'navigate') {
+        // Always bust the cache so the renderer re-reads the active root and
+        // the iframe reloads even when two roots share the same slug.
+        showFrame(withNonce(msg.url));
+      } else if (msg.type === 'reload') {
+        if (!currentUrl) return;
+        frame.src = withNonce(currentUrl);
+      } else if (msg.type === 'progress') {
+        showProgress(msg.route, msg.phase);
+      } else if (msg.type === 'error') {
+        showError(msg.route, msg.message, msg.logs);
+      }
+    });
+  </script>
 </body>
 </html>`;
   }
 
   private dispose(): void {
-    if (this.debounce) {
-      clearTimeout(this.debounce);
+    PreviewPanel.current = undefined;
+    void vscode.commands.executeCommand("setContext", "fumadocs.previewActive", false);
+    this.onDisposeCb?.();
+    while (this.disposables.length) {
+      this.disposables.pop()?.dispose();
     }
-    for (const disposable of this.disposables) {
-      disposable.dispose();
-    }
-    this.disposables.length = 0;
-    this.panel = undefined;
-    this.trackedUri = undefined;
-    this.editing = false;
-    this.initialized = false;
+    this.panel.dispose();
   }
 }
-
-let manager: PreviewManager | undefined;
-
-export const openPreview = (extensionUri: vscode.Uri): void => {
-  if (!manager) {
-    manager = new PreviewManager(extensionUri);
-  }
-  manager.open();
-};

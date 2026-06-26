@@ -1,8 +1,8 @@
 {
   "name": "fumadocs-vscode-plugin",
-  "displayName": "Fumadocs Helper",
-  "description": "Makes editing Fumadocs MDX easy: insert pretty components, autocomplete props, hover docs, and catch mistakes.",
-  "version": "0.4.0",
+  "displayName": "Fumadocs Preview",
+  "description": "Live-preview any MDX/Markdown file or folder with a real Fumadocs site, rendered side-by-side inside VSCode.",
+  "version": "0.5.4",
   "publisher": "researchanddesire",
   "license": "MIT",
   "repository": {
@@ -13,119 +13,102 @@
     "vscode": "^1.85.0"
   },
   "categories": [
-    "Snippets",
     "Other"
   ],
   "keywords": [
     "fumadocs",
     "mdx",
+    "markdown",
     "docs",
-    "documentation"
+    "preview"
   ],
   "icon": "media/icon.png",
   "activationEvents": [
+    "onStartupFinished",
     "onLanguage:mdx",
     "onLanguage:markdown"
   ],
   "main": "./dist/extension.js",
   "contributes": {
-    "languages": [
-      {
-        "id": "mdx",
-        "aliases": [
-          "MDX",
-          "mdx"
-        ],
-        "extensions": [
-          ".mdx"
-        ],
-        "configuration": "./language-configuration.json"
-      }
-    ],
     "commands": [
       {
-        "command": "fumadocs.insertComponent",
-        "title": "Fumadocs: Insert Component",
-        "category": "Fumadocs"
-      },
-      {
-        "command": "fumadocs.newDocPage",
-        "title": "Fumadocs: New Doc Page",
-        "category": "Fumadocs"
-      },
-      {
         "command": "fumadocs.openPreview",
-        "title": "Fumadocs: Open Preview to the Side",
+        "title": "Preview",
+        "shortTitle": "Preview",
         "category": "Fumadocs",
-        "icon": "$(open-preview)"
+        "icon": "$(book)"
       },
       {
-        "command": "fumadocs.insertImage",
-        "title": "Fumadocs: Insert Image",
+        "command": "fumadocs.openInBrowser",
+        "title": "Open in Browser",
+        "shortTitle": "Browser",
         "category": "Fumadocs",
-        "icon": "$(device-camera)"
-      },
+        "icon": "$(link-external)"
+      }
+    ],
+    "submenus": [
       {
-        "command": "fumadocs.convertAll",
-        "title": "Fumadocs: Convert All Markdown to Components",
-        "category": "Fumadocs"
+        "id": "fumadocs.editorMenu",
+        "label": "Fumadocs"
       }
     ],
     "menus": {
-      "editor/context": [
-        {
-          "command": "fumadocs.insertComponent",
-          "when": "editorLangId == mdx || editorLangId == markdown",
-          "group": "1_modification"
-        },
-        {
-          "command": "fumadocs.insertImage",
-          "when": "editorLangId == mdx || editorLangId == markdown",
-          "group": "1_modification"
-        },
-        {
-          "command": "fumadocs.convertAll",
-          "when": "editorLangId == mdx || editorLangId == markdown",
-          "group": "1_modification"
-        }
-      ],
       "editor/title": [
         {
+          "submenu": "fumadocs.editorMenu",
+          "when": "editorLangId == mdx || editorLangId == markdown || resourceExtname == .md || resourceExtname == .mdx",
+          "group": "navigation@0"
+        }
+      ],
+      "fumadocs.editorMenu": [
+        {
           "command": "fumadocs.openPreview",
-          "when": "editorLangId == mdx || editorLangId == markdown",
-          "group": "navigation"
+          "group": "1_main@1"
         },
         {
-          "command": "fumadocs.insertImage",
-          "when": "editorLangId == mdx || editorLangId == markdown",
-          "group": "navigation"
+          "command": "fumadocs.openInBrowser",
+          "when": "fumadocs.previewActive",
+          "group": "1_main@2"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "fumadocs.openPreview",
+          "when": "editorLangId == mdx || editorLangId == markdown || resourceExtname == .md || resourceExtname == .mdx",
+          "group": "navigation@0"
+        }
+      ],
+      "webview/title": [
+        {
+          "command": "fumadocs.openInBrowser",
+          "when": "webviewPanel == fumadocs.preview",
+          "group": "navigation@0"
         }
       ]
     },
     "keybindings": [
       {
-        "command": "fumadocs.insertComponent",
-        "key": "ctrl+alt+i",
-        "mac": "cmd+alt+i",
-        "when": "editorTextFocus && (editorLangId == mdx || editorLangId == markdown)"
-      },
-      {
         "command": "fumadocs.openPreview",
         "key": "ctrl+alt+v",
         "mac": "cmd+alt+v",
-        "when": "editorTextFocus && (editorLangId == mdx || editorLangId == markdown)"
+        "when": "editorTextFocus && (editorLangId == mdx || editorLangId == markdown || resourceExtname == .md || resourceExtname == .mdx)"
       }
     ],
-    "snippets": [
-      {
-        "language": "mdx",
-        "path": "./snippets/mdx.json"
-      },
-      {
-        "language": "markdown",
-        "path": "./snippets/mdx.json"
+    "configuration": {
+      "title": "Fumadocs Preview",
+      "properties": {
+        "fumadocs.contentDirNames": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "content"
+          ],
+          "description": "Directory names treated as a Fumadocs content root when resolving the nearest root of the file being previewed."
+        }
       }
-    ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run build",
@@ -135,14 +118,10 @@
     "package": "vsce package --no-dependencies"
   },
   "devDependencies": {
-    "@types/markdown-it": "^14.1.2",
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.85.0",
     "@vscode/vsce": "^3.2.1",
     "esbuild": "^0.24.2",
     "typescript": "^5.7.2"
-  },
-  "dependencies": {
-    "markdown-it": "^14.2.0"
   }
 }

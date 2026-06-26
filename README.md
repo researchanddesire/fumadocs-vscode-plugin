@@ -1,139 +1,128 @@
-# fumadocs-vscode-plugin
+# Fumadocs Preview
 
-**Fumadocs Helper** — a VSCode / Cursor extension that makes editing [Fumadocs](https://fumadocs.dev) MDX docs easy for everyone, even non-technical teammates.
+**Open source and free.** A VS Code extension that live-previews any MDX or Markdown file — or an entire `content/` directory — with a real [Fumadocs](https://fumadocs.dev) site rendered side-by-side in the editor.
 
-It gives you a friendly way to add the "pretty" components (callouts, cards, tabs, steps, accordions, file trees, and more) without memorizing any syntax.
+Useful when working with a non-technical team who just wants to quickly see what the layout and settings will roughly look like, without running a full docs project locally.
 
-## What you get
+There is **no** custom renderer or WYSIWYG editor. The extension ships a real Next.js + Fumadocs app and serves your content through it, so what you see is what Fumadocs would render — just scoped to preview mode.
 
-- **Interactive side-by-side preview** — press `Cmd+Alt+V` (macOS) / `Ctrl+Alt+V` (Windows/Linux), or click the preview icon in the editor's top-right toolbar, to open a live preview beside your file that shows roughly how Fumadocs will render it (callouts, cards, steps, tabs, accordions, file trees, images…). It's not just a preview — you can edit from it:
-  - **Click any block to edit it.** An inline editor opens for that block and your changes are written straight back to the file. (Each block edits its raw Markdown so formatting is never lost.)
-  - **Convert Markdown to components with one click.** When a block matches a known pattern, a button appears on hover: a **numbered list** → `<Steps>`, a **blockquote** (incl. GitHub admonitions like `> [!WARNING]`) → `<Callout>`, a **list of links** → a `<Cards>` grid.
-  - **Add more items to a component.** Container components show an add button on hover — _+ Add step_, _+ Add card_, _+ Add section_, _+ Add tab_, _+ Add file_ — which inserts a new, correctly-indented child.
-  - The preview is an approximation: interactive components like tabs and accordions are shown expanded.
-- **Insert image button** — click the camera icon in the editor toolbar (or right-click → _Fumadocs: Insert Image_). Pick an image from your computer; it's copied into an `images/` folder next to your document and inserted with the correct relative path. You choose plain Markdown `![alt](path)` or a zoomable `<ImageZoom>`.
-- **Insert Component palette** — press `Cmd+Alt+I` (macOS) / `Ctrl+Alt+I` (Windows/Linux), or right-click → _Fumadocs: Insert Component_, pick a component from a plain-English list, and a ready-to-fill snippet is dropped in. Tab through the blanks; dropdowns appear for choices like a callout's type.
-- **Type-ahead snippets** — start typing `callout`, `cards`, `tabs`, `steps`, `accordions`, `files`, `frontmatter`… and press Tab.
-- **Autocomplete** — type `<` to see every component; inside a tag, get its available props with descriptions.
-- **Hover help** — hover any component name to see what it does, its props, an example, and a link to the docs.
-- **Mistake catching** — gentle warnings for missing frontmatter (`title` / `description`), unknown components that won't render, and invalid option values (e.g. a `Callout` `type` that isn't `info` / `warn` / `error` / `success`).
+## Quick start
 
-## Install (for the team)
+1. Open an `.mdx` or `.md` file.
+2. Run **Fumadocs: Preview** (`Cmd+Alt+V` / `Ctrl+Alt+V`, the editor title-bar menu, or the CodeLens link at the top of the file).
+3. The preview opens beside your editor. Save to reload; switch files to navigate.
 
-1. Download the latest `fumadocs-vscode-plugin-x.y.z.vsix` (from a teammate or the repo Releases).
-2. In Cursor / VSCode: open the **Extensions** panel → the `…` menu → **Install from VSIX…** → choose the file.
-3. Open any `.mdx` file in `content/docs/` and start with `Cmd+Alt+I`.
+On first run, the bundled renderer installs its dependencies from the committed lockfile (~1 minute once). Requires `node` and a package manager (`npm`, `pnpm`, or `yarn`) on your `PATH`.
 
-That's it — no terminal required.
+## How it works
 
-## Components it knows about
+1. The extension finds the **nearest content root** for the active file — the closest ancestor directory named `content` by default (configurable).
+2. It starts a single Fumadocs `next dev` server and points it at that root.
+3. The preview webview loads the page for your file inside a real `DocsLayout` (sidebar, TOC, typography, components).
+4. **Saving** any file under the active root hot-reloads the preview.
+5. **Switching** to another MDX/MD file updates the preview. If the new file lives under a different content root, the server switches roots at runtime — no restart needed.
 
-Callout, Cards, Card, Tabs, Tab, Steps, Step, Accordions, Accordion, Files, Folder, File, TypeTable, Banner, ImageZoom, InlineTOC.
+Because rendering uses Fumadocs' runtime MDX compiler ([`@fumadocs/mdx-remote`](https://fumadocs.dev/docs/integrations/content/mdx-remote)), you can preview arbitrary folders of MDX without a build step or `source.config.ts`.
 
-The full list (with descriptions, props, and snippets) lives in [`src/components.json`](src/components.json). To add or tweak a component, edit that one file and rebuild — every feature (palette, autocomplete, hover, validation) updates automatically.
+## Multiple docs sites at once
 
-## Important: register the components in your Fumadocs app
+One dev server serves whichever content root you are previewing. When you jump between files in different projects (or different `content/` trees), the extension writes the active root to `.preview-state.json` and the renderer re-reads it on every request.
 
-Out of the box Fumadocs only renders `Card`, `Cards`, and `Callout`. The other components exist in `fumadocs-ui` but must be registered before they'll render. In your docs app, update `getMDXComponents` (e.g. `apps/docs-userguide/src/components/mdx.tsx`):
+That means you can live-edit several docs sites in the same VS Code window and the preview follows your active editor — useful when bouncing between repos or content folders during a review.
 
-```tsx
-import defaultMdxComponents from "fumadocs-ui/mdx";
-import type { MDXComponents } from "mdx/types";
-import { Tab, Tabs } from "fumadocs-ui/components/tabs";
-import { Step, Steps } from "fumadocs-ui/components/steps";
-import { Accordion, Accordions } from "fumadocs-ui/components/accordion";
-import { File, Folder, Files } from "fumadocs-ui/components/files";
-import { TypeTable } from "fumadocs-ui/components/type-table";
+## Supported out of the box
 
-export function getMDXComponents(components?: MDXComponents) {
-  return {
-    ...defaultMdxComponents,
-    Tabs,
-    Tab,
-    Steps,
-    Step,
-    Accordions,
-    Accordion,
-    Files,
-    Folder,
-    File,
-    TypeTable,
-    ...components,
-  } satisfies MDXComponents;
-}
-```
+### Layout & navigation
 
-Keep the component list in `src/components.json` in sync with what you register here, so "what you can insert" always matches "what actually renders".
+- Default Fumadocs **docs layout** (sidebar, page title/description, right-hand TOC)
+- **`meta.json` / `meta.jsonc`** for sidebar structure, page order, and section titles
+- **Lucide icons** in `meta.json` (via `lucideIconsPlugin`)
+- YAML **frontmatter** (`title`, `description`, and other fields passed through)
+- Site title derived from the **git repo name** of the content root (falls back to "Fumadocs Preview")
 
-## Develop
+### Markdown
+
+Standard markdown rendered with Fumadocs defaults: headings (with anchor links), paragraphs, emphasis, lists, blockquotes, tables, links, horizontal rules, and inline code.
+
+### MDX components
+
+These Fumadocs UI components are injected globally — you can use them without `import` lines:
+
+| Component | Notes |
+| --- | --- |
+| `Callout` | Includes `CalloutTitle` / `CalloutDescription` compound parts |
+| `Tabs` / `Tab` | Tabbed content |
+| `Steps` / `Step` | Numbered step flows |
+| `Cards` / `Card` | Link cards and grids |
+| `Accordions` / `Accordion` | Collapsible sections |
+| `Files` / `File` / `Folder` | File-tree display |
+| `TypeTable` | Props / type reference tables |
+| `Banner` | Top-of-page banners |
+| `InlineTOC` | In-page table of contents |
+| `CodeBlockTabs` | Tabbed install commands (`CodeBlockTabsList`, `CodeBlockTabsTrigger`, `CodeBlockTab`) |
+
+Plus everything from **`fumadocs-ui/mdx` defaults**: `CodeBlock` (copy button), `Heading`, `Image`, `Table`, etc.
+
+### Code blocks
+
+- **Shiki** syntax highlighting (`github-light` / `github-dark`)
+- Titles, line highlights, and word marks (`// [!code highlight]`, `// [!code word:…]`)
+- Lazy-loaded languages for fast startup
+
+See the bundled sample content in `webapp/content/` for live examples of each surface.
+
+## Settings
+
+| Setting | Default | Description |
+| --- | --- | --- |
+| `fumadocs.contentDirNames` | `["content"]` | Directory names treated as a content root when resolving the nearest root of the previewed file. |
+
+## Not yet supported
+
+This is a **preview** tool, not a drop-in replacement for a production Fumadocs site. The following are intentionally out of scope today:
+
+| Area | Limitation |
+| --- | --- |
+| **Custom components** | MDX `import` / `export` lines are stripped before compilation. Components from your own project won't resolve — only the built-in Fumadocs components listed above are available. |
+| **Custom theming** | Fixed neutral Fumadocs theme and default typography. Your project's CSS variables, color presets, fonts, and Tailwind config are not applied. |
+| **Custom layouts** | Always uses the stock `DocsLayout`. Home layouts, notebook layouts, custom nav/footer, and per-site layout props are not configurable. |
+| **Build-time pipeline** | No `fumadocs-mdx` / `source.config.ts` / MDX collections. Features that depend on compile-time codegen (e.g. type-safe frontmatter, generated `meta`) won't match production. |
+| **OpenAPI / API docs** | `APIPage`, `AutoTypeTable`, and other API-reference integrations are not bundled. |
+| **Image zoom & media plugins** | `ImageZoom` and similar optional media components are not included. |
+| **Local images** | Relative image paths from your content tree may not resolve. Prefer absolute URLs or paths the dev server can serve. |
+| **i18n** | Single locale only. Multi-language routing and translations from a full Fumadocs app are not supported. |
+| **Search, analytics, auth** | Production-only features (Pagefind, Orama, PostHog, etc.) are not wired up. |
+
+If you need pixel-perfect parity with a deployed site, run that site's own dev server. Fumadocs Preview is for **rough layout and content review** — fast feedback while writing MDX, especially with collaborators who don't have the full stack installed.
+
+## Commands
+
+| Command | Description |
+| --- | --- |
+| **Fumadocs: Preview** | Open or focus the side-by-side preview for the active MDX/MD file. |
+| **Fumadocs: Open in Browser** | Open the current preview page in your default browser (available while a preview is active). |
+
+## Development
 
 ```bash
-npm install
-npm run watch      # rebuild on change
-# then press F5 in VSCode to launch the Extension Development Host
+npm install            # extension dev deps
+npm run watch          # rebuild extension on change (F5 to launch in VSCode)
+npm run typecheck      # typecheck the extension
+npm run package        # build a .vsix
+
+cd webapp
+npm install            # the Fumadocs renderer (also done automatically on first preview)
+FUMADOCS_CONTENT_ROOT=/abs/path/to/content npm run dev   # run the renderer standalone
 ```
 
-Other scripts:
+### Layout
 
-```bash
-npm run build      # production bundle to dist/
-npm run typecheck  # tsc --noEmit
-npm run package    # produce a .vsix to share
-```
-
-## Releasing a new version
-
-Releases are automated by GitHub Actions ([`.github/workflows/release.yml`](.github/workflows/release.yml)). To cut a release:
-
-1. Bump the `version` in [`package.json`](package.json) (e.g. `0.1.0` → `0.2.0`).
-2. Commit and push to `main`.
-3. Tag the commit with a matching `v` prefix and push the tag:
-
-```bash
-git tag v0.2.0
-git push origin v0.2.0
-```
-
-The workflow then verifies the tag matches `package.json`, typechecks, packages the `.vsix`, and publishes a **GitHub Release** with the `.vsix` attached (and release notes auto-generated). Teammates grab the `.vsix` from the [Releases page](https://github.com/researchanddesire/fumadocs-vscode-plugin/releases) and install it.
-
-> The tag **must** match the package version (`v0.2.0` ↔ `"version": "0.2.0"`), or the release job fails on purpose to prevent mismatched builds.
-
-Every push/PR to `main` also runs a [CI build](.github/workflows/ci.yml) that typechecks and smoke-tests packaging.
-
-### Optional: publish to Open VSX
-
-If the `OPEN_VSX_TOKEN` repo secret is set, the release workflow also publishes to the [Open VSX registry](https://open-vsx.org), so teammates can install it directly from Cursor's extension search (no manual VSIX). If the secret is absent, that step is skipped and the GitHub Release is still created.
-
-One-time setup:
-
-1. Sign in to [open-vsx.org](https://open-vsx.org) with GitHub.
-2. Sign the publisher agreement: User Settings → "Eclipse Foundation Open VSX Publisher Agreement".
-3. Create an access token: [open-vsx.org/user-settings/tokens](https://open-vsx.org/user-settings/tokens) → Generate New Token.
-4. Create the `researchanddesire` namespace (must match `publisher` in `package.json`):
-   ```bash
-   npx ovsx create-namespace researchanddesire -p <token>
-   ```
-5. Add the token as a GitHub Actions secret named `OPEN_VSX_TOKEN`:
-   Repo → Settings → Secrets and variables → Actions → New repository secret. (Or `gh secret set OPEN_VSX_TOKEN`.)
-
-## How it's built
-
-A single manifest (`src/components.json`) is the source of truth. `src/manifest.ts` loads it, and the feature modules read from it:
-
-- `src/commands.ts` — Insert Component palette + New Doc Page
-- `src/completion.ts` — component name + prop autocomplete
-- `src/hover.ts` — hover documentation
-- `src/diagnostics.ts` — validation/warnings
-- `src/preview.ts` — interactive webview preview manager (two-way editing)
-- `src/render/mdxToHtml.ts` — splits MDX into source-mapped blocks and renders approximate Fumadocs HTML with edit/convert/add controls (uses `markdown-it`)
-- `media/preview.css` / `media/preview.js` — the preview's styling + the inline editing / convert / add-item client logic
-- `src/convert/detectors.ts` — finds Markdown blocks that have a nicer component form
-- `src/codeActions.ts` — the _Convert All_ command
-- `src/image.ts` — copy-and-insert image command
-- `src/extension.ts` — wires everything together on activation
-
-The preview rendering is intentionally approximate (no React runtime): MDX components are transformed into styled HTML that mimics Fumadocs. To tweak how a component looks in the preview, edit `media/preview.css` and the matching transform in `src/render/mdxToHtml.ts`.
+- `src/` — the VS Code extension (root resolution, dev-server lifecycle, webview).
+- `webapp/` — the real Fumadocs Next.js app with a fully runtime content source
+  (`src/lib/scan.ts` → `src/lib/source.ts`), a runtime MDX compiler
+  (`src/lib/compiler.ts`), and a catch-all `/[[...slug]]` route.
+- `webapp/content/` — sample pages exercising every supported component (useful for regression checks).
 
 ## License
 
-MIT
+MIT — free to use, modify, and distribute.

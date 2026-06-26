@@ -1,0 +1,49 @@
+---
+title: Fumadocs Rendering Test Suite
+description: Sample content for exercising default Fumadocs MDX components and markdown rendering in the VS Code preview.
+---
+
+# Fumadocs Rendering Test Suite
+
+This content root exists to validate the [Fumadocs Preview](https://github.com/researchanddesire/fumadocs-vscode-plugin) renderer. Each page targets a specific rendering surface so you can spot regressions quickly.
+
+<Cards>
+  <Card
+    title="Markdown"
+    description="Headings, lists, tables, links, blockquotes, and emphasis."
+    href="/markdown"
+  />
+  <Card
+    title="Code blocks"
+    description="Syntax highlighting, titles, line highlights, and tabbed code."
+    href="/code"
+  />
+  <Card
+    title="Components"
+    description="Callouts, tabs, steps, cards, accordions, and more."
+    href="/components/callouts"
+  />
+  <Card
+    title="Kitchen sink"
+    description="Everything on one page for a fast smoke test."
+    href="/test/content"
+  />
+</Cards>
+
+<Callout type="info" title="How to use">
+
+Open any `.mdx` file from this folder in VS Code and run **Fumadocs: Open Preview**. Edits hot-reload in the preview panel.
+
+</Callout>
+
+## Quick smoke test
+
+If you only have a minute, skim these inline checks:
+
+1. **Headings** — this `h2` should appear in the page TOC on the right.
+2. **Inline code** — `pnpm dev` should use monospace styling.
+3. **Callout** — the info box above should have an icon and tinted background.
+
+```ts title="hello.ts"
+export const greeting = 'Ohai!';
+```

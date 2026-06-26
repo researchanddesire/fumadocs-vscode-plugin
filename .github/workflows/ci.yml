@@ -22,11 +22,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Typecheck
+      - name: Typecheck extension
         run: npm run typecheck
 
-      - name: Build
+      - name: Build extension
         run: npm run build
+
+      - name: Typecheck renderer (webapp)
+        run: |
+          cd webapp
+          npm ci
+          npx tsc --noEmit
 
       - name: Package (smoke test)
         run: npm run package

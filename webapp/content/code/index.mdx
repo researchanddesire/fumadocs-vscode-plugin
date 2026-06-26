@@ -1,0 +1,104 @@
+---
+title: Code blocks
+description: Shiki highlighting, titles, annotations, and CodeBlockTabs from fumadocs-ui/mdx.
+---
+
+# Code blocks
+
+Fenced code blocks are wrapped in the default `pre` → `CodeBlock` component with copy button and Shiki themes (`github-light` / `github-dark`).
+
+## Basic highlighting
+
+```javascript
+function fibonacci(n) {
+  if (n <= 1) return n;
+  return fibonacci(n - 1) + fibonacci(n - 2);
+}
+
+console.log(fibonacci(10));
+```
+
+```typescript
+type User = {
+  id: string;
+  name: string;
+};
+
+export function greet(user: User): string {
+  return `Ohai, ${user.name}!`;
+}
+```
+
+```bash
+pnpm install
+pnpm dev
+```
+
+## Title attribute
+
+```json title="package.json"
+{
+  "name": "docs-ohai",
+  "private": true
+}
+```
+
+## Line highlights and word marks
+
+Rehype Code annotations (when supported by the compiler preset):
+
+```ts title="config.ts"
+import { createCompiler } from '@fumadocs/mdx-remote';
+
+const compiler = createCompiler({
+  rehypeCodeOptions: {
+    themes: { light: 'github-light', dark: 'github-dark' },
+  },
+}); // [!code highlight]
+
+export { compiler }; // [!code word:compiler]
+```
+
+## Inline code
+
+Compare `const x = 1` inline with a block above. Inline code should not show a copy button.
+
+## CodeBlockTabs
+
+Tabbed code blocks from `fumadocs-ui/mdx` default components:
+
+<CodeBlockTabs defaultValue="npm">
+  <CodeBlockTabsList>
+    <CodeBlockTabsTrigger value="npm">npm</CodeBlockTabsTrigger>
+    <CodeBlockTabsTrigger value="pnpm">pnpm</CodeBlockTabsTrigger>
+    <CodeBlockTabsTrigger value="yarn">yarn</CodeBlockTabsTrigger>
+  </CodeBlockTabsList>
+  <CodeBlockTab value="npm">
+
+```bash
+npm install fumadocs-ui
+```
+
+  </CodeBlockTab>
+  <CodeBlockTab value="pnpm">
+
+```bash
+pnpm add fumadocs-ui
+```
+
+  </CodeBlockTab>
+  <CodeBlockTab value="yarn">
+
+```bash
+yarn add fumadocs-ui
+```
+
+  </CodeBlockTab>
+</CodeBlockTabs>
+
+## Long line wrapping
+
+```python
+def long_signature_example( alpha: int, beta: int, gamma: int, delta: int, epsilon: int, zeta: int ) -> dict[str, int]:
+    return {"sum": alpha + beta + gamma + delta + epsilon + zeta}
+```

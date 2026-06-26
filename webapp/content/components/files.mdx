@@ -1,0 +1,55 @@
+---
+title: Files
+description: Files, Folder, and File tree visualization.
+---
+
+# Files
+
+Directory tree visualization for project structure docs.
+
+## Nested project layout
+
+<Files>
+  <Folder name="content" defaultOpen>
+    <File name="meta.json" />
+    <File name="index.mdx" />
+    <Folder name="components">
+      <File name="callouts.mdx" />
+      <File name="tabs.mdx" />
+      <File name="steps.mdx" />
+    </Folder>
+    <Folder name="markdown">
+      <File name="index.mdx" />
+    </Folder>
+  </Folder>
+  <Folder name="webapp">
+    <File name="package.json" />
+    <Folder name="src">
+      <Folder name="components">
+        <File name="mdx.tsx" />
+      </Folder>
+      <Folder name="lib">
+        <File name="compiler.ts" />
+        <File name="scan.ts" />
+      </Folder>
+    </Folder>
+  </Folder>
+  <File name="README.md" />
+</Files>
+
+## Collapsed folder
+
+<Files>
+  <Folder name="collapsed-by-default">
+    <File name="hidden-until-expanded.ts" />
+  </Folder>
+  <File name="visible-file.ts" />
+</Files>
+
+## Disabled folder
+
+<Files>
+  <Folder name="disabled-folder" disabled>
+    <File name="not-interactive.ts" />
+  </Folder>
+</Files>

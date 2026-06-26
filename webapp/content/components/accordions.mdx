@@ -1,0 +1,60 @@
+---
+title: Accordions
+description: Accordions and Accordion for collapsible sections.
+---
+
+# Accordions
+
+Collapsible sections for FAQ-style content.
+
+## Single open (default)
+
+<Accordions type="single">
+  <Accordion title="What is docs-ohai?">
+
+A minimal content root used to test Fumadocs rendering in VS Code preview.
+
+  </Accordion>
+  <Accordion title="Do imports work in MDX?">
+
+The preview strips ESM imports and injects Fumadocs components globally, so `<Callout>` and friends work without explicit imports.
+
+  </Accordion>
+  <Accordion title="How do I add a page?">
+
+Create a new `.mdx` file under `content/` and optionally register it in a nearby `meta.json`.
+
+  </Accordion>
+</Accordions>
+
+## Multiple open
+
+<Accordions type="multiple">
+  <Accordion title="First panel">
+
+Only one accordion is required in `type="single"`, but multiple can stay open here.
+
+  </Accordion>
+  <Accordion title="Second panel">
+
+Open this alongside the first panel when `type="multiple"`.
+
+  </Accordion>
+  <Accordion title="Third panel with code">
+
+```json
+{ "accordion": "with nested code block" }
+```
+
+  </Accordion>
+</Accordions>
+
+## Rich accordion title
+
+<Accordions>
+  <Accordion title="Accordion with **markdown** in title?">
+
+Titles are passed as React nodes; plain text is typical, but you can experiment with richer title content via JSX if needed.
+
+  </Accordion>
+</Accordions>

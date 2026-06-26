@@ -5,7 +5,14 @@ node_modules/**
 esbuild.js
 tsconfig.json
 .gitignore
-*.vsix
-**/*.map
-**/*.ts
-!dist/**
+**/*.vsix
+dist/**/*.map
+
+# Ship the webapp source + lockfile, but never its installed deps or build output.
+webapp/node_modules/**
+webapp/.next/**
+webapp/next-env.d.ts
+webapp/**/*.tsbuildinfo
+webapp/.preview-state.json
+webapp/.preview-server.pid
+webapp/demo-content/**

@@ -1,0 +1,51 @@
+---
+title: Cards
+description: Cards and Card link grids from fumadocs-ui.
+---
+
+# Cards
+
+`Card` and `Cards` are part of the default MDX bundle.
+
+## Link cards
+
+<Cards>
+  <Card
+    title="Markdown"
+    description="Typography, lists, tables, and images."
+    href="/markdown"
+  />
+  <Card
+    title="Code blocks"
+    description="Shiki themes, titles, and tabbed code."
+    href="/code"
+  />
+  <Card
+    title="Callouts"
+    description="Info, warning, error, success, and idea variants."
+    href="/components/callouts"
+  />
+</Cards>
+
+## External cards
+
+<Cards>
+  <Card
+    title="Fumadocs"
+    description="Documentation framework for Next.js."
+    href="https://fumadocs.dev"
+  />
+  <Card
+    title="GitHub"
+    description="Open source repository."
+    href="https://github.com/fuma-nama/fumadocs"
+    external
+  />
+</Cards>
+
+## Title-only cards
+
+<Cards>
+  <Card title="Minimal card" href="/" />
+  <Card title="Another card" href="/test/content" />
+</Cards>

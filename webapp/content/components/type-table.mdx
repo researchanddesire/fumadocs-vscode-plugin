@@ -1,0 +1,75 @@
+---
+title: Type Table
+description: TypeTable for documenting props and API shapes.
+---
+
+# Type Table
+
+`TypeTable` renders a structured API reference from a `type` object.
+
+## Basic props
+
+<TypeTable
+  type={{
+    title: {
+      description: 'Page title shown in the document header.',
+      type: 'string',
+      required: true,
+    },
+    description: {
+      description: 'Short summary under the title.',
+      type: 'string',
+    },
+    draft: {
+      description: 'Hide the page from production builds.',
+      type: 'boolean',
+      default: 'false',
+    },
+  }}
+/>
+
+## Advanced fields
+
+<TypeTable
+  type={{
+    href: {
+      description: 'Destination URL for link cards.',
+      type: 'string',
+      required: true,
+    },
+    external: {
+      description: 'Open in a new tab with rel="noopener".',
+      type: 'boolean',
+      default: 'false',
+    },
+    icon: {
+      description: 'Optional Lucide icon name or custom node.',
+      type: 'ReactNode',
+      deprecated: true,
+    },
+    onClick: {
+      description: 'Called when the card is activated.',
+      type: '(event: MouseEvent) => void',
+      parameters: [
+        {
+          name: 'event',
+          description: 'The originating mouse event.',
+        },
+      ],
+      returns: 'void',
+    },
+  }}
+/>
+
+## Function with typeDescription
+
+<TypeTable
+  type={{
+    compile: {
+      description: 'Compile MDX source at request time.',
+      type: '(options: CompileOptions) => Promise<CompiledMDX>',
+      typeDescription: 'Uses @fumadocs/mdx-remote with Shiki lazy loading.',
+      typeDescriptionLink: 'https://fumadocs.dev/docs/headless/mdx/remote',
+    },
+  }}
+/>

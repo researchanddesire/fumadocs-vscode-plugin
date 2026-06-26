@@ -1,0 +1,45 @@
+---
+title: Inline TOC
+description: InlineTOC collapsible in-page table of contents.
+---
+
+# Inline TOC
+
+`InlineTOC` embeds a collapsible table of contents inside the page body (distinct from the layout TOC in the sidebar).
+
+## Sample TOC data
+
+<InlineTOC
+  items={[
+    { title: 'Inline TOC', url: '#inline-toc', depth: 1 },
+    { title: 'Sample TOC data', url: '#sample-toc-data', depth: 2 },
+    { title: 'Nested sections', url: '#nested-sections', depth: 2 },
+    { title: 'Deeply nested item', url: '#deeply-nested-item', depth: 3 },
+    { title: 'Another top-level section', url: '#another-top-level-section', depth: 2 },
+    { title: 'Verify anchor jumps', url: '#verify-anchor-jumps', depth: 2 },
+  ]}
+/>
+
+## Nested sections
+
+Content under this heading validates indentation for depth-2 items in the inline TOC above.
+
+### Deeply nested item
+
+Depth-3 entries should appear indented one level further in the inline TOC list.
+
+## Another top-level section
+
+Add more body content so the inline TOC toggle has room above following sections.
+
+## Verify anchor jumps
+
+Click entries in the inline TOC — each link should scroll to the matching heading on this page.
+
+### Target alpha
+
+Alpha anchor target.
+
+### Target beta
+
+Beta anchor target.
