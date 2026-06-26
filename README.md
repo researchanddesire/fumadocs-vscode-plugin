@@ -123,6 +123,26 @@ FUMADOCS_CONTENT_ROOT=/abs/path/to/content npm run dev   # run the renderer stan
   (`src/lib/compiler.ts`), and a catch-all `/[[...slug]]` route.
 - `webapp/content/` — sample pages exercising every supported component (useful for regression checks).
 
+## Release
+
+Pushing a tag matching `package.json` (e.g. `v0.5.4` when version is `0.5.4`) triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which:
+
+1. Typechecks and packages a `.vsix`
+2. Creates a GitHub Release with the VSIX attached
+3. Publishes to the [Visual Studio Marketplace](https://marketplace.visualstudio.com/) (if `VSCE_PAT` is set)
+4. Publishes to [Open VSX](https://open-vsx.org/) (if `OPEN_VSX_TOKEN` is set)
+
+### Marketplace PAT setup
+
+1. Create a Personal Access Token at [Azure DevOps](https://dev.azure.com/) → User settings → Personal access tokens, with **Marketplace** → **Manage** scope (or use a [publisher-specific token](https://code.visualstudio.com/api/working-with-extensions/publishing-extension#create-a-publisher)).
+2. Add it as a GitHub repository secret named `VSCE_PAT`.
+3. Re-run the release workflow for an existing tag if needed: **Actions → Release → Run workflow** with tag `v0.5.4`.
+
+```bash
+git tag v0.6.0          # after bumping package.json
+git push origin v0.6.0  # triggers release
+```
+
 ## License
 
 MIT — free to use, modify, and distribute.
