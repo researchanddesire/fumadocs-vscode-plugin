@@ -57,6 +57,18 @@ export const FUMADOCS_COMPONENTS: ComponentCatalogItem[] = [
     configurable: true,
   },
   {
+    id: "codeblock",
+    label: "Code block",
+    description: "Fenced code with language + title",
+    configurable: true,
+  },
+  {
+    id: "table",
+    label: "Table",
+    description: "Grid with rows, columns, alignment",
+    configurable: true,
+  },
+  {
     id: "files",
     label: "Files",
     description: "File tree visualization",

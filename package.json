@@ -47,10 +47,23 @@
         "icon": "$(link-external)"
       },
       {
+        "command": "fumadocs.refreshPreview",
+        "title": "Refresh Preview",
+        "shortTitle": "Refresh",
+        "category": "Fumadocs",
+        "icon": "$(refresh)"
+      },
+      {
         "command": "fumadocs.docsTools.addImage",
         "title": "Add Image",
         "category": "Fumadocs",
         "icon": "$(file-media)"
+      },
+      {
+        "command": "fumadocs.editImage",
+        "title": "Edit Image",
+        "category": "Fumadocs",
+        "icon": "$(device-camera)"
       },
       {
         "command": "fumadocs.docsTools.addComponent",
@@ -81,6 +94,16 @@
       {
         "command": "fumadocs.insertComponent.code-block-tabs",
         "title": "CodeBlockTabs",
+        "category": "Fumadocs"
+      },
+      {
+        "command": "fumadocs.insertComponent.codeblock",
+        "title": "Code block",
+        "category": "Fumadocs"
+      },
+      {
+        "command": "fumadocs.insertComponent.table",
+        "title": "Table",
         "category": "Fumadocs"
       },
       {
@@ -268,6 +291,14 @@
         {
           "command": "fumadocs.insertComponent.type-table",
           "group": "components@10"
+        },
+        {
+          "command": "fumadocs.insertComponent.codeblock",
+          "group": "components@11"
+        },
+        {
+          "command": "fumadocs.insertComponent.table",
+          "group": "components@12"
         }
       ],
       "commandPalette": [
@@ -289,6 +320,14 @@
         },
         {
           "command": "fumadocs.insertComponent.code-block-tabs",
+          "when": "false"
+        },
+        {
+          "command": "fumadocs.insertComponent.codeblock",
+          "when": "false"
+        },
+        {
+          "command": "fumadocs.insertComponent.table",
           "when": "false"
         },
         {
@@ -322,6 +361,10 @@
         {
           "command": "fumadocs.meta.removeRefs",
           "when": "false"
+        },
+        {
+          "command": "fumadocs.editImage",
+          "when": "false"
         }
       ],
       "webview/title": [
@@ -329,6 +372,11 @@
           "command": "fumadocs.openInBrowser",
           "when": "webviewPanel == fumadocs.preview",
           "group": "navigation@0"
+        },
+        {
+          "command": "fumadocs.refreshPreview",
+          "when": "webviewPanel == fumadocs.preview",
+          "group": "navigation@1"
         }
       ]
     },

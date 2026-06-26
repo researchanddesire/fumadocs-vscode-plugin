@@ -1,19 +1,5 @@
-import * as path from "path";
 import * as vscode from "vscode";
 import { isMarkdownEditor } from "../markdown";
-
-/** Build markdown or MDX image markup for the active file. */
-export function imageMarkup(relPath: string, alt: string): string {
-  const editor = vscode.window.activeTextEditor;
-  const ext = editor
-    ? path.extname(editor.document.uri.fsPath).toLowerCase()
-    : ".mdx";
-  const safeAlt = alt.replace(/"/g, '\\"');
-  if (ext === ".mdx") {
-    return `<img src="${relPath}" alt="${safeAlt}" />`;
-  }
-  return `![${alt}](${relPath})`;
-}
 
 interface LineMeta {
   /** Whether the line is inside (or is the boundary of) a fenced code block. */

@@ -66,3 +66,50 @@ export function getContentRoot(): string {
 export function getContentOverrides(): Record<string, string> {
   return readPreviewState().overrides;
 }
+
+/**
+ * The project root for the active content root — i.e. the directory whose
+ * `public/` folder backs root-relative image paths like `/img/foo.png`.
+ *
+ * The content root is usually a `content/` (or deeper) subdirectory, while
+ * assets live in a sibling `public/`. Walk up from the content root to the
+ * nearest ancestor that looks like a project root (`public/`, `.git`, or
+ * `package.json`), falling back to the content root's parent.
+ *
+ * Also used as the containment boundary for the image route, so only files
+ * inside the previewed project can be served.
+ */
+export function getProjectRoot(): string {
+  const root = getContentRoot();
+  let dir = root;
+  for (;;) {
+    if (
+      isDir(path.join(dir, 'public')) ||
+      isDir(path.join(dir, '.git')) ||
+      fileExists(path.join(dir, 'package.json'))
+    ) {
+      return dir;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  const parent = path.dirname(root);
+  return parent === root ? root : parent;
+}
+
+function isDir(p: string): boolean {
+  try {
+    return fs.statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function fileExists(p: string): boolean {
+  try {
+    return fs.statSync(p).isFile();
+  } catch {
+    return false;
+  }
+}

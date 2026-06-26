@@ -3,8 +3,9 @@ import * as fs from "fs";
 import * as path from "path";
 import { PreviewCodeLensProvider } from "./codelens";
 import { ComponentEditCodeLensProvider } from "./componentEdit";
+import { MarkdownBlockEditCodeLensProvider } from "./markdownBlockEdit";
+import { ImageEditCodeLensProvider } from "./imageEdit";
 import { registerEditorActions } from "./editorActions";
-import { registerEditorBanner } from "./editorBanner";
 import { registerDocsToolsView } from "./docsTools/docsToolsView";
 import { DevServerManager, ToolchainError } from "./devServer";
 import { PreviewPanel } from "./preview";
@@ -46,12 +47,18 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const codeLensProvider = new PreviewCodeLensProvider();
   const componentLensProvider = new ComponentEditCodeLensProvider();
+  const imageLensProvider = new ImageEditCodeLensProvider();
+  const blockLensProvider = new MarkdownBlockEditCodeLensProvider();
   const metaLensProvider = new MetaCodeLensProvider();
   metaDiagnostics = vscode.languages.createDiagnosticCollection("fumadocs-meta");
   let componentLensDebounce: ReturnType<typeof setTimeout> | undefined;
   const refreshComponentLenses = (): void => {
     if (componentLensDebounce) clearTimeout(componentLensDebounce);
-    componentLensDebounce = setTimeout(() => componentLensProvider.refresh(), 250);
+    componentLensDebounce = setTimeout(() => {
+      componentLensProvider.refresh();
+      imageLensProvider.refresh();
+      blockLensProvider.refresh();
+    }, 250);
   };
 
   const metaFileSelector: vscode.DocumentSelector = [
@@ -70,6 +77,14 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.languages.registerCodeLensProvider(
       [{ scheme: "file", pattern: "**/*.{md,mdx}" }],
       componentLensProvider,
+    ),
+    vscode.languages.registerCodeLensProvider(
+      [{ scheme: "file", pattern: "**/*.{md,mdx}" }],
+      imageLensProvider,
+    ),
+    vscode.languages.registerCodeLensProvider(
+      [{ scheme: "file", pattern: "**/*.{md,mdx}" }],
+      blockLensProvider,
     ),
     vscode.languages.registerCodeLensProvider(metaFileSelector, metaLensProvider),
     vscode.languages.registerCodeActionsProvider(
@@ -113,6 +128,17 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("fumadocs.openInBrowser", () =>
       openPreviewInBrowser(),
     ),
+    vscode.commands.registerCommand("fumadocs.refreshPreview", () =>
+      restartPreview(),
+    ),
+    vscode.window.registerWebviewPanelSerializer("fumadocs.preview", {
+      deserializeWebviewPanel(panel) {
+        const restored = PreviewPanel.restore(panel);
+        restored.setRestartHandler(() => void restartPreview());
+        restored.setStartHandler(() => void openPreview());
+        return Promise.resolve();
+      },
+    }),
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (!PreviewPanel.exists || !editor) return;
       if (!isMarkdown(editor.document)) return;
@@ -141,7 +167,12 @@ export function activate(context: vscode.ExtensionContext): void {
       scheduleReload();
     }),
     vscode.workspace.onDidOpenTextDocument((doc) => {
-      if (isMarkdown(doc)) codeLensProvider.refresh();
+      if (isMarkdown(doc)) {
+        codeLensProvider.refresh();
+        imageLensProvider.refresh();
+        componentLensProvider.refresh();
+        blockLensProvider.refresh();
+      }
       if (isMetaFile(doc.uri)) void refreshMetaDiagnostics(metaDiagnostics, doc.uri);
     }),
     vscode.workspace.onDidChangeTextDocument((event) => {
@@ -160,7 +191,6 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 
   registerEditorActions(context);
-  registerEditorBanner(context);
   registerDocsToolsView(context);
 }
 
@@ -427,6 +457,7 @@ async function restartPreview(): Promise<void> {
 async function updatePreviewFor(filePath: string): Promise<void> {
   const panel = PreviewPanel.createOrShow();
   panel.setRestartHandler(() => void restartPreview());
+  panel.setStartHandler(() => void openPreview());
   const contentDirNames = vscode.workspace
     .getConfiguration("fumadocs")
     .get<string[]>("contentDirNames", ["content"]);

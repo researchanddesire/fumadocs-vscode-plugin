@@ -5,7 +5,7 @@ Built on and for [Fumadocs](https://www.fumadocs.dev/). Designed to help non-tec
 [![Install from VS Code Marketplace](https://img.shields.io/badge/VS%20Code%20Marketplace-Install%20Now-007ACC?logo=visualstudiocode&logoColor=white)](https://marketplace.visualstudio.com/items?itemName=ResearchAndDesire.fumadocs-vscode-plugin)
 [![Install from Open VSX](https://img.shields.io/badge/Open%20VSX-Install%20Now-A60EE5?logo=eclipseide&logoColor=white)](https://open-vsx.org/extension/researchanddesire/fumadocs-vscode-plugin)
 
-![Fumadocs Preview Editor](https://raw.githubusercontent.com/researchanddesire/fumadocs-vscode-plugin/main/media/image.png)
+![Fumadocs Preview Editor](./public/image.png)
 
 ## Features
 

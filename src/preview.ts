@@ -10,6 +10,7 @@ export class PreviewPanel {
   private disposables: vscode.Disposable[] = [];
   private onDisposeCb: (() => void) | undefined;
   private onRestartCb: (() => void) | undefined;
+  private onStartCb: (() => void) | undefined;
   private currentUrl = "";
 
   static get currentUrl(): string | undefined {
@@ -40,9 +41,30 @@ export class PreviewPanel {
     return PreviewPanel.current !== undefined;
   }
 
-  private constructor(panel: vscode.WebviewPanel) {
+  /**
+   * Adopt a webview panel that VSCode restored from a previous session (it
+   * reopens the tab but the extension lost its reference). Without this the
+   * tab comes back blank; here we re-attach and show the "start preview"
+   * intro instead.
+   */
+  static restore(panel: vscode.WebviewPanel): PreviewPanel {
+    PreviewPanel.current?.dispose();
+    panel.webview.options = { enableScripts: true, localResourceRoots: [] };
+    PreviewPanel.current = new PreviewPanel(panel, "start");
+    void vscode.commands.executeCommand(
+      "setContext",
+      "fumadocs.previewActive",
+      true,
+    );
+    return PreviewPanel.current;
+  }
+
+  private constructor(
+    panel: vscode.WebviewPanel,
+    initial: "progress" | "start" = "progress",
+  ) {
     this.panel = panel;
-    this.panel.webview.html = this.shellHtml();
+    this.panel.webview.html = this.shellHtml(initial);
     this.panel.webview.onDidReceiveMessage(
       (msg: { type?: string; url?: string }) => {
         if (msg.type === "openExternal") {
@@ -52,6 +74,8 @@ export class PreviewPanel {
           void vscode.env.openExternal(vscode.Uri.parse(msg.url));
         } else if (msg.type === "restartPreview") {
           this.onRestartCb?.();
+        } else if (msg.type === "startPreview") {
+          this.onStartCb?.();
         }
       },
       undefined,
@@ -67,6 +91,16 @@ export class PreviewPanel {
   /** Register the handler invoked when the user clicks "Restart preview". */
   setRestartHandler(cb: () => void): void {
     this.onRestartCb = cb;
+  }
+
+  /** Register the handler invoked when the user clicks "Start preview". */
+  setStartHandler(cb: () => void): void {
+    this.onStartCb = cb;
+  }
+
+  /** Show the idle intro with a "Start preview" call to action. */
+  showStart(): void {
+    void this.panel.webview.postMessage({ type: "start" });
   }
 
   /** Point the iframe at `baseUrl + slugPath`, optionally setting the title. */
@@ -121,7 +155,9 @@ export class PreviewPanel {
     });
   }
 
-  private shellHtml(): string {
+  private shellHtml(initial: "progress" | "start" = "progress"): string {
+    const startVisible = initial === "start" ? " visible" : "";
+    const progressVisible = initial === "progress" ? " visible" : "";
     const csp = [
       "default-src 'none'",
       "style-src 'unsafe-inline'",
@@ -199,6 +235,13 @@ export class PreviewPanel {
     inset: 0;
   }
   .overlay.visible { display: flex; }
+  #start .start-title {
+    font-size: 15px; font-weight: 600; margin-bottom: 10px;
+  }
+  #start .start-intro {
+    max-width: 460px; font-size: 13px; line-height: 1.55; margin-bottom: 20px;
+    color: var(--vscode-descriptionForeground);
+  }
   .spinner {
     width: 22px; height: 22px; margin-bottom: 14px;
     border: 2px solid var(--vscode-descriptionForeground);
@@ -259,11 +302,26 @@ export class PreviewPanel {
       <button class="toolbar-btn" id="open-browser" type="button" title="Open this page in your default browser">
         Open in Browser ↗
       </button>
+      <button class="toolbar-btn" id="refresh-preview" type="button" title="Stop the preview server, start it again, and reload this page">
+        ↻ Refresh
+      </button>
     </div>
   </div>
 
   <div class="preview-shell">
-  <div id="progress" class="overlay visible">
+  <div id="start" class="overlay${startVisible}">
+    <div class="start-title">Fumadocs Preview</div>
+    <div class="start-intro">
+      This panel renders the Markdown or MDX file you're editing as a live page
+      from your Fumadocs site, side by side with the editor. Open a doc, then
+      start the preview to see it here — it reloads as you type.
+    </div>
+    <button class="toolbar-btn" id="start-preview" type="button">
+      ▶ Start preview
+    </button>
+  </div>
+
+  <div id="progress" class="overlay${progressVisible}">
     <div class="spinner"></div>
     <div class="route" id="progress-route">&nbsp;</div>
     <div class="phase" id="progress-phase">Starting Fumadocs preview…</div>
@@ -291,6 +349,7 @@ export class PreviewPanel {
     const vscodeApi = acquireVsCodeApi();
     const frame = document.getElementById('frame');
     const openBrowserBtn = document.getElementById('open-browser');
+    const start = document.getElementById('start');
     const progress = document.getElementById('progress');
     const progressRoute = document.getElementById('progress-route');
     const progressPhase = document.getElementById('progress-phase');
@@ -329,13 +388,22 @@ export class PreviewPanel {
       readyHandled = false;
       frame.src = url;
       frame.style.display = 'block';
+      start.classList.remove('visible');
       progress.classList.remove('visible');
       errorBox.classList.remove('visible');
+    }
+
+    function showStart() {
+      frame.style.display = 'none';
+      progress.classList.remove('visible');
+      errorBox.classList.remove('visible');
+      start.classList.add('visible');
     }
 
     function showProgress(route, phase) {
       progressRoute.textContent = route ? 'Route: ' + route : '';
       progressPhase.textContent = phase || 'Starting Fumadocs preview…';
+      start.classList.remove('visible');
       errorBox.classList.remove('visible');
       frame.style.display = 'none';
       progress.classList.add('visible');
@@ -358,6 +426,7 @@ export class PreviewPanel {
       errorLogs.textContent = logs && logs.trim().length
         ? logs
         : 'No logs were captured.';
+      start.classList.remove('visible');
       progress.classList.remove('visible');
       frame.style.display = 'none';
       errorBox.classList.add('visible');
@@ -377,6 +446,16 @@ export class PreviewPanel {
     restartBtn.addEventListener('click', () => {
       restartBtn.disabled = true;
       vscodeApi.postMessage({ type: 'restartPreview' });
+    });
+
+    const refreshBtn = document.getElementById('refresh-preview');
+    refreshBtn.addEventListener('click', () => {
+      vscodeApi.postMessage({ type: 'restartPreview' });
+    });
+
+    const startBtn = document.getElementById('start-preview');
+    startBtn.addEventListener('click', () => {
+      vscodeApi.postMessage({ type: 'startPreview' });
     });
 
     const helpBtn = document.getElementById('error-help');
@@ -414,6 +493,8 @@ export class PreviewPanel {
         if (!currentUrl) return;
         readyHandled = false;
         frame.src = withNonce(currentUrl);
+      } else if (msg.type === 'start') {
+        showStart();
       } else if (msg.type === 'progress') {
         showProgress(msg.route, msg.phase);
       } else if (msg.type === 'error') {
