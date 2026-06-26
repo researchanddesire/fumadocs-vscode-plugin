@@ -2,7 +2,7 @@
   "name": "fumadocs-vscode-plugin",
   "displayName": "Fumadocs Preview",
   "description": "Live-preview any MDX/Markdown file or folder with a real Fumadocs site, rendered side-by-side inside VSCode.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "publisher": "researchanddesire",
   "license": "MIT",
   "repository": {
@@ -112,6 +112,32 @@
         "command": "fumadocs.docsTools.refresh",
         "title": "Refresh Docs Tools",
         "category": "Fumadocs"
+      },
+      {
+        "command": "fumadocs.editMeta",
+        "title": "Edit meta.json",
+        "category": "Fumadocs",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "fumadocs.syncMeta",
+        "title": "Sync meta.json (include missing pages)",
+        "category": "Fumadocs"
+      },
+      {
+        "command": "fumadocs.meta.addPages",
+        "title": "Add pages to meta.json",
+        "category": "Fumadocs"
+      },
+      {
+        "command": "fumadocs.meta.addRest",
+        "title": "Add rest (...) to meta.json",
+        "category": "Fumadocs"
+      },
+      {
+        "command": "fumadocs.meta.removeRefs",
+        "title": "Remove entries from meta.json",
+        "category": "Fumadocs"
       }
     ],
     "viewsContainers": {
@@ -149,10 +175,22 @@
       }
     ],
     "menus": {
+      "explorer/context": [
+        {
+          "command": "fumadocs.editMeta",
+          "when": "explorerResourceIsFolder",
+          "group": "fumadocs@1"
+        }
+      ],
       "editor/title": [
         {
           "submenu": "fumadocs.editorMenu",
           "when": "editorLangId == mdx || editorLangId == markdown || resourceExtname == .md || resourceExtname == .mdx",
+          "group": "navigation@0"
+        },
+        {
+          "command": "fumadocs.editMeta",
+          "when": "resourceFilename == meta.json || resourceFilename == meta.jsonc",
           "group": "navigation@0"
         }
       ],
@@ -272,6 +310,18 @@
         {
           "command": "fumadocs.insertComponent.type-table",
           "when": "false"
+        },
+        {
+          "command": "fumadocs.meta.addPages",
+          "when": "false"
+        },
+        {
+          "command": "fumadocs.meta.addRest",
+          "when": "false"
+        },
+        {
+          "command": "fumadocs.meta.removeRefs",
+          "when": "false"
         }
       ],
       "webview/title": [
@@ -309,6 +359,11 @@
           "minimum": 1,
           "maximum": 65535,
           "description": "Preferred port for the bundled Fumadocs preview server. If the port is already in use by another process, you'll be asked whether to stop that process or fall back to a free port."
+        },
+        "fumadocs.autoIncludePages": {
+          "type": "boolean",
+          "default": true,
+          "description": "When a new page is created in a folder whose meta.json has an explicit \"pages\" list (without a \"...\" rest item), automatically add the new page so it doesn't silently disappear from the sidebar."
         }
       }
     }

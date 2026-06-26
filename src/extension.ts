@@ -1,14 +1,27 @@
 import * as vscode from "vscode";
+import * as fs from "fs";
 import * as path from "path";
 import { PreviewCodeLensProvider } from "./codelens";
 import { ComponentEditCodeLensProvider } from "./componentEdit";
 import { registerEditorActions } from "./editorActions";
 import { registerEditorBanner } from "./editorBanner";
 import { registerDocsToolsView } from "./docsTools/docsToolsView";
-import { DevServerManager } from "./devServer";
+import { DevServerManager, ToolchainError } from "./devServer";
 import { PreviewPanel } from "./preview";
-import { computeSlugPath, findContentRoot } from "./contentRoot";
+import { computeSlugPath, findContentRoot, findNamedContentRoot } from "./contentRoot";
 import { isMarkdown } from "./markdown";
+import { MetaEditorPanel } from "./metaEditor";
+import { isMetaFile, MetaCodeLensProvider } from "./meta/metaCodeLens";
+import {
+  addPages,
+  addRest,
+  autoIncludeNewPage,
+  MetaCodeActionProvider,
+  refreshMetaDiagnostics,
+  removeRefs,
+} from "./meta/metaDiagnostics";
+import { resolveMetaUri } from "./meta/metaWrite";
+import { discoverFolderItems } from "./meta/metaModel";
 
 let manager: DevServerManager;
 let output: vscode.OutputChannel;
@@ -17,8 +30,12 @@ let currentFile: string | undefined;
 let scrollDebounce: ReturnType<typeof setTimeout> | undefined;
 let reloadDebounce: ReturnType<typeof setTimeout> | undefined;
 let liveDebounce: ReturnType<typeof setTimeout> | undefined;
+/** Whether the pending debounced reload should be a full (structural) reload. */
+let pendingStructuralReload = false;
 let contentWatcher: vscode.FileSystemWatcher | undefined;
 let watchedRoot: string | undefined;
+let metaDiagnostics: vscode.DiagnosticCollection;
+let metaDiagDebounce: ReturnType<typeof setTimeout> | undefined;
 /** Unsaved buffer contents (abs path -> text) pushed to the live preview. */
 const overrides = new Map<string, string>();
 
@@ -29,15 +46,23 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const codeLensProvider = new PreviewCodeLensProvider();
   const componentLensProvider = new ComponentEditCodeLensProvider();
+  const metaLensProvider = new MetaCodeLensProvider();
+  metaDiagnostics = vscode.languages.createDiagnosticCollection("fumadocs-meta");
   let componentLensDebounce: ReturnType<typeof setTimeout> | undefined;
   const refreshComponentLenses = (): void => {
     if (componentLensDebounce) clearTimeout(componentLensDebounce);
     componentLensDebounce = setTimeout(() => componentLensProvider.refresh(), 250);
   };
 
+  const metaFileSelector: vscode.DocumentSelector = [
+    { scheme: "file", pattern: "**/meta.json" },
+    { scheme: "file", pattern: "**/meta.jsonc" },
+  ];
+
   context.subscriptions.push(
     output,
     manager,
+    metaDiagnostics,
     vscode.languages.registerCodeLensProvider(
       [{ scheme: "file", pattern: "**/*.{md,mdx}" }],
       codeLensProvider,
@@ -45,6 +70,30 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.languages.registerCodeLensProvider(
       [{ scheme: "file", pattern: "**/*.{md,mdx}" }],
       componentLensProvider,
+    ),
+    vscode.languages.registerCodeLensProvider(metaFileSelector, metaLensProvider),
+    vscode.languages.registerCodeActionsProvider(
+      metaFileSelector,
+      new MetaCodeActionProvider(),
+      { providedCodeActionKinds: MetaCodeActionProvider.providedKinds },
+    ),
+    vscode.commands.registerCommand("fumadocs.editMeta", (uri?: vscode.Uri) =>
+      openMetaEditor(uri),
+    ),
+    vscode.commands.registerCommand("fumadocs.syncMeta", () =>
+      syncActiveFolderMeta(),
+    ),
+    vscode.commands.registerCommand(
+      "fumadocs.meta.addPages",
+      (folderDir: string, slugs: string[]) => addPages(folderDir, slugs),
+    ),
+    vscode.commands.registerCommand(
+      "fumadocs.meta.addRest",
+      (folderDir: string) => addRest(folderDir),
+    ),
+    vscode.commands.registerCommand(
+      "fumadocs.meta.removeRefs",
+      (folderDir: string, refs: string[]) => removeRefs(folderDir, refs),
     ),
     vscode.workspace.onDidChangeTextDocument((event) => {
       const doc = event.document;
@@ -93,8 +142,22 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.workspace.onDidOpenTextDocument((doc) => {
       if (isMarkdown(doc)) codeLensProvider.refresh();
+      if (isMetaFile(doc.uri)) void refreshMetaDiagnostics(metaDiagnostics, doc.uri);
+    }),
+    vscode.workspace.onDidChangeTextDocument((event) => {
+      if (isMetaFile(event.document.uri)) {
+        scheduleMetaDiagnostics(event.document.uri);
+      }
+    }),
+    vscode.workspace.onDidSaveTextDocument((doc) => {
+      if (isMetaFile(doc.uri)) void refreshMetaDiagnostics(metaDiagnostics, doc.uri);
     }),
   );
+
+  // Seed diagnostics for any meta files already open at startup.
+  for (const doc of vscode.workspace.textDocuments) {
+    if (isMetaFile(doc.uri)) void refreshMetaDiagnostics(metaDiagnostics, doc.uri);
+  }
 
   registerEditorActions(context);
   registerEditorBanner(context);
@@ -109,6 +172,7 @@ export function deactivate(): void {
   if (scrollDebounce) clearTimeout(scrollDebounce);
   if (reloadDebounce) clearTimeout(reloadDebounce);
   if (liveDebounce) clearTimeout(liveDebounce);
+  if (metaDiagDebounce) clearTimeout(metaDiagDebounce);
 }
 
 /**
@@ -127,22 +191,140 @@ function watchContentRoot(root: string): void {
     "**/*.{md,mdx,json,jsonc,png,jpg,jpeg,gif,svg,webp,avif}",
   );
   const watcher = vscode.workspace.createFileSystemWatcher(pattern);
-  watcher.onDidChange(() => scheduleReload());
-  watcher.onDidCreate(() => scheduleReload());
-  watcher.onDidDelete(() => scheduleReload());
+  // Edits soft-refresh in place; create/delete are structural (a page or folder
+  // appeared or disappeared) so they fully reload the iframe.
+  watcher.onDidChange((uri) => {
+    if (isMetaFile(uri)) scheduleMetaDiagnostics(uri);
+    scheduleReload(false);
+  });
+  watcher.onDidCreate((uri) => {
+    void handleContentCreated(uri);
+    scheduleReload(true);
+  });
+  watcher.onDidDelete((uri) => {
+    void handleContentDeleted(uri);
+    scheduleReload(true);
+  });
   contentWatcher = watcher;
+}
+
+/** Whether a uri is a markdown page on disk. */
+function isPageFile(uri: vscode.Uri): boolean {
+  const ext = path.extname(uri.fsPath).toLowerCase();
+  return ext === ".md" || ext === ".mdx";
+}
+
+/** Refresh meta diagnostics for the meta file governing a given folder. */
+function refreshFolderMeta(folderDir: string): void {
+  void refreshMetaDiagnostics(metaDiagnostics, resolveMetaUri(folderDir));
+}
+
+/**
+ * React to a new file on disk: auto-include new pages in the nearest meta
+ * (when enabled) and refresh diagnostics.
+ */
+async function handleContentCreated(uri: vscode.Uri): Promise<void> {
+  if (isMetaFile(uri)) {
+    await refreshMetaDiagnostics(metaDiagnostics, uri);
+    return;
+  }
+  if (!isPageFile(uri)) return;
+  const autoInclude = vscode.workspace
+    .getConfiguration("fumadocs")
+    .get<boolean>("autoIncludePages", true);
+  if (autoInclude) await autoIncludeNewPage(uri);
+  refreshFolderMeta(path.dirname(uri.fsPath));
+}
+
+/** React to a deleted file: drop meta diagnostics or recheck for dangling refs. */
+async function handleContentDeleted(uri: vscode.Uri): Promise<void> {
+  if (isMetaFile(uri)) {
+    metaDiagnostics.delete(uri);
+    return;
+  }
+  if (isPageFile(uri)) refreshFolderMeta(path.dirname(uri.fsPath));
+}
+
+/** Debounced diagnostics refresh for a meta file (e.g. while typing). */
+function scheduleMetaDiagnostics(uri: vscode.Uri): void {
+  if (metaDiagDebounce) clearTimeout(metaDiagDebounce);
+  metaDiagDebounce = setTimeout(() => {
+    void refreshMetaDiagnostics(metaDiagnostics, uri);
+  }, 250);
+}
+
+/** Resolve the folder a meta editor should target from a command argument. */
+function resolveMetaFolder(uri?: vscode.Uri): string | undefined {
+  if (uri) {
+    try {
+      const stat = fs.statSync(uri.fsPath);
+      if (stat.isDirectory()) return uri.fsPath;
+    } catch {
+      // fall through to dirname handling
+    }
+    return path.dirname(uri.fsPath);
+  }
+  const active = vscode.window.activeTextEditor?.document.uri.fsPath;
+  if (active) return path.dirname(active);
+  return undefined;
+}
+
+/** Open the visual meta editor for a folder (resolved from the argument). */
+function openMetaEditor(uri?: vscode.Uri): void {
+  const folder = resolveMetaFolder(uri);
+  if (!folder) {
+    void vscode.window.showWarningMessage(
+      "Open a file inside a content folder, or right-click a folder, to edit its meta.json.",
+    );
+    return;
+  }
+  MetaEditorPanel.open(folder);
+}
+
+/** Add every missing page in the active file's folder to its meta.json. */
+async function syncActiveFolderMeta(): Promise<void> {
+  const active = vscode.window.activeTextEditor?.document.uri.fsPath;
+  if (!active) {
+    void vscode.window.showWarningMessage(
+      "Open a Markdown or MDX file to sync its folder's meta.json.",
+    );
+    return;
+  }
+  const contentDirNames = vscode.workspace
+    .getConfiguration("fumadocs")
+    .get<string[]>("contentDirNames", ["content"]);
+  // Only act inside a real content root to avoid touching unrelated folders.
+  if (!findNamedContentRoot(active, contentDirNames)) {
+    void vscode.window.showWarningMessage(
+      "This file isn't inside a configured content directory.",
+    );
+    return;
+  }
+  const folderDir = path.dirname(active);
+  const slugs = discoverFolderItems(folderDir).map((e) => e.slug);
+  await addPages(folderDir, slugs);
+  refreshFolderMeta(folderDir);
 }
 
 /**
  * Debounced preview reload, shared by the save handler and the filesystem
- * watcher so a single save (which fires both) only reloads once.
+ * watcher so a single save (which fires both) only reloads once. When
+ * `structural` is true (pages/folders added or removed) the iframe is fully
+ * reloaded; otherwise a soft in-place refresh preserves scroll position.
  */
-function scheduleReload(): void {
+function scheduleReload(structural = false): void {
   if (!PreviewPanel.exists) return;
+  if (structural) pendingStructuralReload = true;
   if (reloadDebounce) clearTimeout(reloadDebounce);
   reloadDebounce = setTimeout(() => {
-    if (!PreviewPanel.exists) return;
-    PreviewPanel.createOrShow().reload();
+    if (!PreviewPanel.exists) {
+      pendingStructuralReload = false;
+      return;
+    }
+    const panel = PreviewPanel.createOrShow();
+    if (pendingStructuralReload) panel.reloadHard();
+    else panel.reload();
+    pendingStructuralReload = false;
   }, 120);
 }
 
@@ -275,7 +457,11 @@ async function updatePreviewFor(filePath: string): Promise<void> {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     output.appendLine(`[error] ${message}`);
-    panel.showError(route, message, manager.getRecentLogs());
+    const help =
+      err instanceof ToolchainError
+        ? { url: err.helpUrl, label: err.helpLabel }
+        : undefined;
+    panel.showError(route, message, manager.getRecentLogs(), help);
     void vscode.window.showErrorMessage(`Fumadocs Preview: ${message}`);
   }
 }

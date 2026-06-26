@@ -43,6 +43,8 @@ export class DocsToolsViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.onDidReceiveMessage(
       (msg: { type?: string; id?: string; text?: string; mode?: string }) => {
         if (msg.type === "addImage") void openAddImageFlow();
+        if (msg.type === "editMeta")
+          void vscode.commands.executeCommand("fumadocs.editMeta");
         if (msg.type === "insertComponent" && msg.id) void insertComponent(msg.id);
         if (msg.type === "liveApply" && typeof msg.text === "string") {
           this.enqueueLiveApply(msg.text, msg.mode === "edit" ? "edit" : "insert");
@@ -582,6 +584,13 @@ function sidebarHtml(): string {
       <p class="disabled-note" id="toolsNote" hidden>Tools unlock when a file inside a content root is active.</p>
     </section>
     <section>
+      <h2 class="section-title">Navigation</h2>
+      <button type="button" class="tool-btn" id="editMetaBtn" disabled>
+        <span class="icon">🗂</span>
+        Edit folder meta.json…
+      </button>
+    </section>
+    <section>
       <h2 class="section-title">Fumadocs components</h2>
       <div class="components" id="components"></div>
     </section>
@@ -610,6 +619,7 @@ function sidebarHtml(): string {
   const vscode = acquireVsCodeApi();
   const statusEl = document.getElementById('status');
   const addImageBtn = document.getElementById('addImageBtn');
+  const editMetaBtn = document.getElementById('editMetaBtn');
   const toolsNote = document.getElementById('toolsNote');
   const componentsEl = document.getElementById('components');
 
@@ -1198,6 +1208,7 @@ function sidebarHtml(): string {
     const ctx = msg.context;
     enabledState = !!ctx.enabled;
     addImageBtn.disabled = !enabledState;
+    if (editMetaBtn) editMetaBtn.disabled = !enabledState;
     toolsNote.hidden = enabledState;
     // Keep an in-progress edit open even if the active editor briefly changes.
     if (!enabledState && !editing) closeBuilder();
@@ -1218,6 +1229,10 @@ function sidebarHtml(): string {
   addImageBtn.addEventListener('click', function () {
     if (addImageBtn.disabled) return;
     vscode.postMessage({ type: 'addImage' });
+  });
+  if (editMetaBtn) editMetaBtn.addEventListener('click', function () {
+    if (editMetaBtn.disabled) return;
+    vscode.postMessage({ type: 'editMeta' });
   });
   builderCancel.addEventListener('click', function () {
     if (liveTimer) { clearTimeout(liveTimer); liveTimer = null; }

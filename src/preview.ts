@@ -44,10 +44,12 @@ export class PreviewPanel {
     this.panel = panel;
     this.panel.webview.html = this.shellHtml();
     this.panel.webview.onDidReceiveMessage(
-      (msg: { type?: string }) => {
+      (msg: { type?: string; url?: string }) => {
         if (msg.type === "openExternal") {
           const url = PreviewPanel.currentUrl;
           if (url) void vscode.env.openExternal(vscode.Uri.parse(url));
+        } else if (msg.type === "openUrl" && msg.url) {
+          void vscode.env.openExternal(vscode.Uri.parse(msg.url));
         } else if (msg.type === "restartPreview") {
           this.onRestartCb?.();
         }
@@ -80,6 +82,15 @@ export class PreviewPanel {
     void this.panel.webview.postMessage({ type: "reload" });
   }
 
+  /**
+   * Fully reload the iframe (new `frame.src`) rather than soft-refreshing.
+   * Used for structural changes — pages or folders added/removed — where the
+   * active route or the whole tree may have changed.
+   */
+  reloadHard(): void {
+    void this.panel.webview.postMessage({ type: "reloadHard" });
+  }
+
   /** Scroll the preview so the given 1-based source line is in view. */
   scrollToLine(line: number): void {
     void this.panel.webview.postMessage({ type: "scrollToLine", line });
@@ -90,9 +101,24 @@ export class PreviewPanel {
     void this.panel.webview.postMessage({ type: "progress", route, phase });
   }
 
-  /** Show a failure with a collapsible dropdown of debugging logs. */
-  showError(route: string, message: string, logs: string): void {
-    void this.panel.webview.postMessage({ type: "error", route, message, logs });
+  /**
+   * Show a failure with a collapsible dropdown of debugging logs. When `help`
+   * is provided, a button linking to fix-it instructions is shown (e.g. a
+   * Node.js install page when the toolchain is missing).
+   */
+  showError(
+    route: string,
+    message: string,
+    logs: string,
+    help?: { url: string; label: string },
+  ): void {
+    void this.panel.webview.postMessage({
+      type: "error",
+      route,
+      message,
+      logs,
+      help,
+    });
   }
 
   private shellHtml(): string {
@@ -195,7 +221,7 @@ export class PreviewPanel {
     white-space: pre-wrap; word-break: break-word;
   }
   #error .error-actions {
-    display: flex; justify-content: center; margin-bottom: 16px;
+    display: flex; justify-content: center; gap: 8px; margin-bottom: 16px;
   }
   #error details {
     width: 100%; max-width: 720px; text-align: left;
@@ -248,6 +274,7 @@ export class PreviewPanel {
     <div class="route" id="error-route">&nbsp;</div>
     <div class="message" id="error-message"></div>
     <div class="error-actions">
+      <button class="toolbar-btn" id="error-help" type="button" style="display:none"></button>
       <button class="toolbar-btn" id="restart-preview" type="button" title="Stop and restart the Fumadocs preview server">
         ↻ Restart preview
       </button>
@@ -314,9 +341,18 @@ export class PreviewPanel {
       progress.classList.add('visible');
     }
 
-    function showError(route, message, logs) {
+    function showError(route, message, logs, help) {
       const restartBtn = document.getElementById('restart-preview');
       if (restartBtn) restartBtn.disabled = false;
+      const helpBtn = document.getElementById('error-help');
+      if (help && help.url) {
+        helpBtn.textContent = (help.label || 'Learn more') + ' ↗';
+        helpBtn.dataset.url = help.url;
+        helpBtn.style.display = '';
+      } else {
+        helpBtn.dataset.url = '';
+        helpBtn.style.display = 'none';
+      }
       errorRoute.textContent = route ? 'Route: ' + route : '';
       errorMessage.textContent = message || 'Unknown error.';
       errorLogs.textContent = logs && logs.trim().length
@@ -343,6 +379,12 @@ export class PreviewPanel {
       vscodeApi.postMessage({ type: 'restartPreview' });
     });
 
+    const helpBtn = document.getElementById('error-help');
+    helpBtn.addEventListener('click', () => {
+      const url = helpBtn.dataset.url;
+      if (url) vscodeApi.postMessage({ type: 'openUrl', url });
+    });
+
     window.addEventListener('message', (event) => {
       const msg = event.data;
       if (!msg) return;
@@ -366,10 +408,16 @@ export class PreviewPanel {
           readyHandled = false;
           frame.src = withNonce(currentUrl);
         }
+      } else if (msg.type === 'reloadHard') {
+        // Structural change (page/folder added or removed): the active route or
+        // the whole tree may have changed, so reload the iframe outright.
+        if (!currentUrl) return;
+        readyHandled = false;
+        frame.src = withNonce(currentUrl);
       } else if (msg.type === 'progress') {
         showProgress(msg.route, msg.phase);
       } else if (msg.type === 'error') {
-        showError(msg.route, msg.message, msg.logs);
+        showError(msg.route, msg.message, msg.logs, msg.help);
       } else if (msg.type === 'scrollToLine') {
         pendingScrollLine = msg.line;
         forwardScroll();

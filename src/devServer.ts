@@ -9,6 +9,31 @@ export type ProgressFn = (phase: string) => void;
 
 const MAX_LOG_CHARS = 16_000;
 
+/** Where the user is sent to install Node.js (which bundles npm). */
+const NODE_DOWNLOAD_URL = "https://nodejs.org/en/download";
+/** Node.js help docs for getting a working package manager. */
+const NODE_PM_HELP_URL = "https://nodejs.org/en/download/package-manager";
+/** Lowest Node.js major version the bundled Next.js renderer supports. */
+const MIN_NODE_MAJOR = 20;
+/** Sharp's official install/troubleshooting docs. */
+const SHARP_HELP_URL = "https://sharp.pixelplumbing.com/install";
+
+/**
+ * A preview failure caused by a missing/incompatible toolchain (Node.js or a
+ * package manager). Carries a link the error view can surface so the user can
+ * fix it without leaving the editor.
+ */
+export class ToolchainError extends Error {
+  constructor(
+    message: string,
+    readonly helpUrl: string,
+    readonly helpLabel: string,
+  ) {
+    super(message);
+    this.name = "ToolchainError";
+  }
+}
+
 /**
  * Owns the lifecycle of a single bundled Fumadocs `next dev` server.
  *
@@ -87,7 +112,9 @@ export class DevServerManager {
   }
 
   private async start(onProgress?: ProgressFn): Promise<string> {
+    await this.ensureNode(onProgress);
     await this.ensureDependencies(onProgress);
+    await this.ensureSharp(onProgress);
     this.killStaleServer();
 
     const port = await this.resolvePort(onProgress);
@@ -120,6 +147,34 @@ export class DevServerManager {
     onProgress?.("Waiting for the preview server to become ready…");
     await waitForServer(port, proc);
     return `http://127.0.0.1:${port}`;
+  }
+
+  /**
+   * Verify Node.js is on PATH and new enough to run the bundled renderer.
+   * Throws a {@link ToolchainError} (with an install link) otherwise, so the
+   * preview shows actionable instructions instead of a cryptic spawn failure.
+   */
+  private async ensureNode(onProgress?: ProgressFn): Promise<void> {
+    onProgress?.("Checking for Node.js…");
+    const version = await nodeVersion();
+    if (version === null) {
+      this.recordLine("[toolchain] Node.js was not found on PATH");
+      throw new ToolchainError(
+        "Node.js is required to run the Fumadocs preview, but it wasn't found on your PATH. Install Node.js (it includes npm), then restart the preview.",
+        NODE_DOWNLOAD_URL,
+        "Install Node.js",
+      );
+    }
+
+    this.recordLine(`[toolchain] using Node.js ${version}`);
+    const major = parseMajorVersion(version);
+    if (major !== null && major < MIN_NODE_MAJOR) {
+      throw new ToolchainError(
+        `The Fumadocs preview needs Node.js ${MIN_NODE_MAJOR} or newer, but found ${version}. Update Node.js, then restart the preview.`,
+        NODE_DOWNLOAD_URL,
+        "Update Node.js",
+      );
+    }
   }
 
   private nextBinary(): string {
@@ -288,23 +343,68 @@ export class DevServerManager {
     }
 
     onProgress?.("Installing renderer dependencies (first run, this can take a minute)…");
-    const install = Promise.resolve(
-      vscode.window.withProgress(
-        {
-          location: vscode.ProgressLocation.Notification,
-          title:
-            "Fumadocs Preview: installing renderer dependencies (first run)…",
-          cancellable: false,
-        },
-        () => this.runInstall(),
-      ),
-    );
+    // Reset the cached promise on failure so a retry (e.g. after the user
+    // installs Node.js or a package manager) actually re-runs the install.
+    const install = this.installDependencies().catch((err) => {
+      this.installPromise = undefined;
+      throw err;
+    });
     this.installPromise = install;
     return install;
   }
 
-  private runInstall(): Promise<void> {
+  private async installDependencies(): Promise<void> {
     const { command, args } = this.installCommand();
+    await this.ensurePackageManager(command);
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title:
+          "Fumadocs Preview: installing renderer dependencies (first run)…",
+        cancellable: false,
+      },
+      () => this.runInstall(command, args),
+    );
+  }
+
+  /**
+   * Verify the package manager needed for the first-run install is on PATH.
+   * Node.js bundles npm, so a missing npm usually means a broken/partial Node
+   * install — point at the Node.js docs rather than failing opaquely.
+   */
+  private async ensurePackageManager(command: string): Promise<void> {
+    if (await commandExists(command)) return;
+    this.recordLine(`[toolchain] "${command}" was not found on PATH`);
+    throw new ToolchainError(
+      `Node.js is installed, but "${command}" — needed to install the preview's dependencies — wasn't found on your PATH.`,
+      NODE_PM_HELP_URL,
+      `How to set up ${command}`,
+    );
+  }
+
+  /**
+   * Verify the bundled `sharp` (pulled in by Next.js for image handling)
+   * actually loads in the same Node.js that runs the dev server. A skipped
+   * install script or a wrong-platform binary makes `require("sharp")` throw,
+   * which otherwise surfaces as an opaque render failure. On failure we throw a
+   * {@link ToolchainError} with platform-specific fix-it instructions.
+   */
+  private async ensureSharp(onProgress?: ProgressFn): Promise<void> {
+    onProgress?.("Checking image support (sharp)…");
+    const result = await probeSharp(this.webappDir);
+    if (result.ok) {
+      this.recordLine("[toolchain] sharp loaded successfully");
+      return;
+    }
+    this.recordLine(`[toolchain] sharp failed to load:\n${result.error}`);
+    throw new ToolchainError(
+      sharpInstructions(this.webappDir),
+      SHARP_HELP_URL,
+      "Sharp install help",
+    );
+  }
+
+  private runInstall(command: string, args: string[]): Promise<void> {
     this.recordLine(`[install] ${command} ${args.join(" ")}`);
 
     return new Promise<void>((resolve, reject) => {
@@ -339,7 +439,11 @@ export class DevServerManager {
     if (has("yarn.lock")) {
       return { command: "yarn", args: ["install", "--frozen-lockfile"] };
     }
-    return { command: "npm", args: ["ci"] };
+    // `next` pulls in `sharp`, which has a native install script. If the user
+    // has `ignore-scripts=true` in their global ~/.npmrc (common on locked-down
+    // Windows setups), that script is skipped and the preview fails to render
+    // images. Force scripts on for this install so sharp's binary is fetched.
+    return { command: "npm", args: ["ci", "--ignore-scripts=false"] };
   }
 
   dispose(): void {
@@ -443,4 +547,113 @@ function parsePids(text: string, isWin: boolean): number[] {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Resolve `node --version` (e.g. "v22.1.0"), or null if Node isn't runnable. */
+function nodeVersion(): Promise<string | null> {
+  return new Promise((resolve) => {
+    let out = "";
+    const proc = cp.spawn("node", ["--version"], {
+      shell: process.platform === "win32",
+      windowsHide: true,
+    });
+    proc.on("error", () => resolve(null));
+    proc.stdout?.on("data", (d) => (out += String(d)));
+    proc.on("exit", (code) => resolve(code === 0 ? out.trim() : null));
+  });
+}
+
+/** Parse the major version from a `vX.Y.Z` string; null if unrecognized. */
+function parseMajorVersion(version: string): number | null {
+  const match = /^v?(\d+)\./.exec(version.trim());
+  return match ? Number.parseInt(match[1], 10) : null;
+}
+
+/** True if `<command> --version` runs successfully (i.e. it's on PATH). */
+function commandExists(command: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const proc = cp.spawn(command, ["--version"], {
+      shell: process.platform === "win32",
+      windowsHide: true,
+    });
+    proc.on("error", () => resolve(false));
+    proc.on("exit", (code) => resolve(code === 0));
+  });
+}
+
+/**
+ * Try to load the webapp's `sharp` in a child `node` (the same runtime that
+ * will run the dev server). Resolves ok=false with the captured error when the
+ * native binding can't be loaded.
+ */
+function probeSharp(
+  webappDir: string,
+): Promise<{ ok: boolean; error: string }> {
+  const sharpEntry = path.join(webappDir, "node_modules", "sharp");
+  // Loading the module triggers the native binding load; that's the real test.
+  const code = `require(${JSON.stringify(sharpEntry)});`;
+  return new Promise((resolve) => {
+    let err = "";
+    const proc = cp.spawn("node", ["-e", code], {
+      cwd: webappDir,
+      windowsHide: true,
+    });
+    proc.on("error", (e) => resolve({ ok: false, error: String(e) }));
+    proc.stderr?.on("data", (d) => (err += String(d)));
+    proc.on("exit", (exitCode) =>
+      resolve(
+        exitCode === 0
+          ? { ok: true, error: "" }
+          : { ok: false, error: err.trim() || `node exited with code ${exitCode}` },
+      ),
+    );
+  });
+}
+
+/** Platform-specific, copy-pasteable steps to repair a broken `sharp` install. */
+function sharpInstructions(webappDir: string): string {
+  const intro =
+    "Image support (sharp) couldn't be loaded, so the Fumadocs preview can't render. ";
+  const cd = `  cd "${webappDir}"`;
+  if (process.platform === "win32") {
+    return [
+      intro,
+      "On Windows this usually means the native binary was skipped by an `ignore-scripts` policy.",
+      "",
+      "Reinstall it with scripts and the platform binary enabled:",
+      cd,
+      "  npm install --ignore-scripts=false --include=optional sharp",
+      "",
+      "If you use @lavamoat/allow-scripts, also run:",
+      "  npm config set allow-scripts=sharp --location=user",
+      "",
+      "Then restart the preview.",
+    ].join("\n");
+  }
+  if (process.platform === "darwin") {
+    return [
+      intro,
+      "On macOS this usually means the platform binary is missing (e.g. an x64/arm64 mismatch).",
+      "",
+      "Reinstall the optional platform binary:",
+      cd,
+      "  npm install --include=optional sharp",
+      "",
+      "On Apple Silicon, make sure Node.js isn't running under Rosetta (`node -p process.arch` should be \"arm64\").",
+      "",
+      "Then restart the preview.",
+    ].join("\n");
+  }
+  return [
+    intro,
+    "On Linux this usually means the platform binary is missing for your C library (glibc vs musl).",
+    "",
+    "Reinstall the optional platform binary:",
+    cd,
+    "  npm install --include=optional sharp",
+    "",
+    "On Alpine/musl you may also need the system libvips:  apk add --no-cache vips",
+    "",
+    "Then restart the preview.",
+  ].join("\n");
 }
