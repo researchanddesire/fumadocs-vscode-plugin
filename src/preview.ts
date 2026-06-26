@@ -9,6 +9,7 @@ export class PreviewPanel {
   private readonly panel: vscode.WebviewPanel;
   private disposables: vscode.Disposable[] = [];
   private onDisposeCb: (() => void) | undefined;
+  private onRestartCb: (() => void) | undefined;
   private currentUrl = "";
 
   static get currentUrl(): string | undefined {
@@ -47,6 +48,8 @@ export class PreviewPanel {
         if (msg.type === "openExternal") {
           const url = PreviewPanel.currentUrl;
           if (url) void vscode.env.openExternal(vscode.Uri.parse(url));
+        } else if (msg.type === "restartPreview") {
+          this.onRestartCb?.();
         }
       },
       undefined,
@@ -57,6 +60,11 @@ export class PreviewPanel {
 
   onDidDispose(cb: () => void): void {
     this.onDisposeCb = cb;
+  }
+
+  /** Register the handler invoked when the user clicks "Restart preview". */
+  setRestartHandler(cb: () => void): void {
+    this.onRestartCb = cb;
   }
 
   /** Point the iframe at `baseUrl + slugPath`, optionally setting the title. */
@@ -70,6 +78,11 @@ export class PreviewPanel {
   /** Force the iframe to reload its current page (after a save). */
   reload(): void {
     void this.panel.webview.postMessage({ type: "reload" });
+  }
+
+  /** Scroll the preview so the given 1-based source line is in view. */
+  scrollToLine(line: number): void {
+    void this.panel.webview.postMessage({ type: "scrollToLine", line });
   }
 
   /** Show the in-progress view: which route is loading and the current phase. */
@@ -181,6 +194,9 @@ export class PreviewPanel {
     max-width: 560px; font-size: 13px; line-height: 1.5; margin-bottom: 16px;
     white-space: pre-wrap; word-break: break-word;
   }
+  #error .error-actions {
+    display: flex; justify-content: center; margin-bottom: 16px;
+  }
   #error details {
     width: 100%; max-width: 720px; text-align: left;
     border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35));
@@ -231,6 +247,11 @@ export class PreviewPanel {
     <div class="badge">Fumadocs preview failed</div>
     <div class="route" id="error-route">&nbsp;</div>
     <div class="message" id="error-message"></div>
+    <div class="error-actions">
+      <button class="toolbar-btn" id="restart-preview" type="button" title="Stop and restart the Fumadocs preview server">
+        ↻ Restart preview
+      </button>
+    </div>
     <details>
       <summary>Show debugging logs</summary>
       <pre id="error-logs"></pre>
@@ -251,9 +272,48 @@ export class PreviewPanel {
     const errorMessage = document.getElementById('error-message');
     const errorLogs = document.getElementById('error-logs');
     let currentUrl = '';
+    // Most recent editor cursor line; replayed once the iframe is ready.
+    let pendingScrollLine = null;
+    // Last scroll anchor reported by the page, restored after a live-reload.
+    let lastAnchor = null;
+    // What to do once the (re)loaded page signals it's ready.
+    let pageMode = 'navigate'; // 'navigate' | 'reload'
+    let readyHandled = false;
+
+    function forwardScroll() {
+      if (pendingScrollLine == null || !frame.contentWindow) return;
+      frame.contentWindow.postMessage(
+        { type: 'fumadocs:scrollToLine', line: pendingScrollLine },
+        '*',
+      );
+    }
+
+    function restoreScroll() {
+      if (lastAnchor == null || !frame.contentWindow) return;
+      frame.contentWindow.postMessage(
+        { type: 'fumadocs:restoreScroll', anchor: lastAnchor },
+        '*',
+      );
+    }
+
+    // Run once per (re)load: keep your place on reload, jump to cursor on nav.
+    function handleReady() {
+      if (readyHandled) return;
+      readyHandled = true;
+      if (pageMode === 'reload' && lastAnchor != null) restoreScroll();
+      else forwardScroll();
+    }
+
+    // Fallback for pages that don't emit 'fumadocs:ready'.
+    frame.addEventListener('load', function () {
+      setTimeout(handleReady, 300);
+    });
 
     function showFrame(url) {
       currentUrl = url;
+      pageMode = 'navigate';
+      readyHandled = false;
+      lastAnchor = null;
       frame.src = url;
       frame.style.display = 'block';
       progress.classList.remove('visible');
@@ -269,6 +329,8 @@ export class PreviewPanel {
     }
 
     function showError(route, message, logs) {
+      const restartBtn = document.getElementById('restart-preview');
+      if (restartBtn) restartBtn.disabled = false;
       errorRoute.textContent = route ? 'Route: ' + route : '';
       errorMessage.textContent = message || 'Unknown error.';
       errorLogs.textContent = logs && logs.trim().length
@@ -289,20 +351,41 @@ export class PreviewPanel {
       vscodeApi.postMessage({ type: 'openExternal' });
     });
 
+    const restartBtn = document.getElementById('restart-preview');
+    restartBtn.addEventListener('click', () => {
+      restartBtn.disabled = true;
+      vscodeApi.postMessage({ type: 'restartPreview' });
+    });
+
     window.addEventListener('message', (event) => {
       const msg = event.data;
       if (!msg) return;
+      // Messages from the preview page (inside the iframe).
+      if (msg.type === 'fumadocs:ready') {
+        handleReady();
+        return;
+      }
+      if (msg.type === 'fumadocs:anchor') {
+        lastAnchor = msg.anchor;
+        return;
+      }
       if (msg.type === 'navigate') {
         // Always bust the cache so the renderer re-reads the active root and
         // the iframe reloads even when two roots share the same slug.
         showFrame(withNonce(msg.url));
       } else if (msg.type === 'reload') {
         if (!currentUrl) return;
+        // Keep the last anchor so we can restore the reader's place.
+        pageMode = 'reload';
+        readyHandled = false;
         frame.src = withNonce(currentUrl);
       } else if (msg.type === 'progress') {
         showProgress(msg.route, msg.phase);
       } else if (msg.type === 'error') {
         showError(msg.route, msg.message, msg.logs);
+      } else if (msg.type === 'scrollToLine') {
+        pendingScrollLine = msg.line;
+        forwardScroll();
       }
     });
   </script>

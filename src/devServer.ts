@@ -85,7 +85,7 @@ export class DevServerManager {
     await this.ensureDependencies(onProgress);
     this.killStaleServer();
 
-    const port = await findFreePort();
+    const port = await this.resolvePort(onProgress);
     const bin = this.nextBinary();
     onProgress?.(`Starting the Fumadocs dev server on port ${port}…`);
     this.recordLine(`[server] starting on :${port}`);
@@ -120,6 +120,98 @@ export class DevServerManager {
   private nextBinary(): string {
     const binName = process.platform === "win32" ? "next.cmd" : "next";
     return path.join(this.webappDir, "node_modules", ".bin", binName);
+  }
+
+  /** The user's preferred preview port (defaults to 6969). */
+  private preferredPort(): number {
+    const configured = vscode.workspace
+      .getConfiguration("fumadocs")
+      .get<number>("previewPort", 6969);
+    return Number.isInteger(configured) && configured > 0 && configured < 65536
+      ? configured
+      : 6969;
+  }
+
+  /**
+   * Decide which port to bind. Prefer the configured port. Any server we
+   * previously started has already been killed via the PID file, so if the
+   * preferred port is still busy it belongs to a *different* process — ask the
+   * user whether to stop it or fall back to a free port. Never silently hop
+   * ports.
+   */
+  private async resolvePort(onProgress?: ProgressFn): Promise<number> {
+    const preferred = this.preferredPort();
+    if (await isPortFree(preferred)) return preferred;
+
+    onProgress?.(`Port ${preferred} is already in use…`);
+    this.recordLine(`[server] port ${preferred} is in use by another process`);
+
+    const stop = `Stop the process on port ${preferred}`;
+    const fallback = "Use a different port";
+    const choice = await vscode.window.showWarningMessage(
+      `Port ${preferred} is already in use by another process (not the Fumadocs preview). How should the preview proceed?`,
+      { modal: true },
+      stop,
+      fallback,
+    );
+
+    if (choice === stop) {
+      onProgress?.(`Stopping the process on port ${preferred}…`);
+      await this.killProcessOnPort(preferred);
+      if (await isPortFree(preferred)) return preferred;
+      throw new Error(
+        `Port ${preferred} is still in use after attempting to stop the existing process.`,
+      );
+    }
+
+    if (choice === fallback) {
+      const port = await findFreePort();
+      this.recordLine(`[server] falling back to free port :${port}`);
+      return port;
+    }
+
+    throw new Error(
+      `Port ${preferred} is in use. Preview cancelled — free the port or pick another in the "fumadocs.previewPort" setting.`,
+    );
+  }
+
+  /** Best-effort kill of whatever process is listening on `port`. */
+  private async killProcessOnPort(port: number): Promise<void> {
+    const pids = await pidsOnPort(port);
+    if (pids.length === 0) {
+      this.recordLine(`[server] no process found listening on :${port}`);
+      return;
+    }
+    for (const pid of pids) {
+      try {
+        process.kill(pid, "SIGKILL");
+        this.recordLine(`[server] killed process pid ${pid} on :${port}`);
+      } catch (err) {
+        this.recordLine(`[server] failed to kill pid ${pid}: ${String(err)}`);
+      }
+    }
+    // Give the OS a moment to release the socket.
+    await delay(300);
+  }
+
+  /** Stop the running server so the next `ensure()` starts a fresh one. */
+  stop(): void {
+    if (this.proc) {
+      try {
+        this.proc.kill("SIGKILL");
+      } catch {
+        // ignore
+      }
+      this.proc = undefined;
+    }
+    this.baseUrl = undefined;
+    this.starting = undefined;
+    try {
+      fs.unlinkSync(this.pidPath);
+    } catch {
+      // ignore
+    }
+    this.recordLine("[server] stopped (restart requested)");
   }
 
   private writeState(root: string): void {
@@ -289,4 +381,47 @@ function findFreePort(): Promise<number> {
       }
     });
   });
+}
+
+/** True if `port` can be bound on 127.0.0.1 right now. */
+function isPortFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.unref();
+    srv.once("error", () => resolve(false));
+    srv.listen(port, "127.0.0.1", () => {
+      srv.close(() => resolve(true));
+    });
+  });
+}
+
+/** PIDs of processes listening on `port` (best-effort, platform-specific). */
+function pidsOnPort(port: number): Promise<number[]> {
+  const isWin = process.platform === "win32";
+  const command = isWin
+    ? `netstat -ano -p tcp | findstr ":${port} "`
+    : `lsof -nP -iTCP:${port} -sTCP:LISTEN -t`;
+  return new Promise((resolve) => {
+    cp.exec(command, { windowsHide: true }, (_err, stdout) => {
+      resolve(parsePids(stdout ?? "", isWin));
+    });
+  });
+}
+
+/** Extract PIDs from `lsof -t` (unix) or `netstat -ano` (windows) output. */
+function parsePids(text: string, isWin: boolean): number[] {
+  const trailingPid = /(\d+)\s*$/;
+  const tokens = isWin
+    ? text.split(/\r?\n/).map((line) => trailingPid.exec(line.trim())?.[1])
+    : text.split(/\s+/);
+  const pids = new Set<number>();
+  for (const token of tokens) {
+    const pid = Number.parseInt(token ?? "", 10);
+    if (pid > 0) pids.add(pid);
+  }
+  return [...pids];
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

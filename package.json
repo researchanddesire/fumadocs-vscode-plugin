@@ -2,7 +2,7 @@
   "name": "fumadocs-vscode-plugin",
   "displayName": "Fumadocs Preview",
   "description": "Live-preview any MDX/Markdown file or folder with a real Fumadocs site, rendered side-by-side inside VSCode.",
-  "version": "0.5.4",
+  "version": "0.9.0",
   "publisher": "researchanddesire",
   "license": "MIT",
   "repository": {
@@ -25,6 +25,7 @@
   "icon": "media/icon.png",
   "activationEvents": [
     "onStartupFinished",
+    "onView:fumadocs.docsTools",
     "onLanguage:mdx",
     "onLanguage:markdown"
   ],
@@ -44,12 +45,107 @@
         "shortTitle": "Browser",
         "category": "Fumadocs",
         "icon": "$(link-external)"
+      },
+      {
+        "command": "fumadocs.docsTools.addImage",
+        "title": "Add Image",
+        "category": "Fumadocs",
+        "icon": "$(file-media)"
+      },
+      {
+        "command": "fumadocs.docsTools.addComponent",
+        "title": "Add Component",
+        "category": "Fumadocs",
+        "icon": "$(symbol-snippet)"
+      },
+      {
+        "command": "fumadocs.insertComponent.accordions",
+        "title": "Accordions",
+        "category": "Fumadocs"
+      },
+      {
+        "command": "fumadocs.insertComponent.banner",
+        "title": "Banner",
+        "category": "Fumadocs"
+      },
+      {
+        "command": "fumadocs.insertComponent.callout",
+        "title": "Callout",
+        "category": "Fumadocs"
+      },
+      {
+        "command": "fumadocs.insertComponent.cards",
+        "title": "Cards",
+        "category": "Fumadocs"
+      },
+      {
+        "command": "fumadocs.insertComponent.code-block-tabs",
+        "title": "CodeBlockTabs",
+        "category": "Fumadocs"
+      },
+      {
+        "command": "fumadocs.insertComponent.files",
+        "title": "Files",
+        "category": "Fumadocs"
+      },
+      {
+        "command": "fumadocs.insertComponent.inline-toc",
+        "title": "InlineTOC",
+        "category": "Fumadocs"
+      },
+      {
+        "command": "fumadocs.insertComponent.steps",
+        "title": "Steps",
+        "category": "Fumadocs"
+      },
+      {
+        "command": "fumadocs.insertComponent.tabs",
+        "title": "Tabs",
+        "category": "Fumadocs"
+      },
+      {
+        "command": "fumadocs.insertComponent.type-table",
+        "title": "TypeTable",
+        "category": "Fumadocs"
+      },
+      {
+        "command": "fumadocs.docsTools.refresh",
+        "title": "Refresh Docs Tools",
+        "category": "Fumadocs"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "fumadocs",
+          "title": "Fumadocs",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "fumadocs": [
+        {
+          "type": "webview",
+          "id": "fumadocs.docsTools",
+          "name": "Docs Tools"
+        }
+      ]
+    },
     "submenus": [
       {
         "id": "fumadocs.editorMenu",
         "label": "Fumadocs"
+      },
+      {
+        "id": "fumadocs.contextMenu",
+        "label": "Fumadocs Preview",
+        "icon": "$(book)"
+      },
+      {
+        "id": "fumadocs.insertComponentMenu",
+        "label": "Insert Component",
+        "icon": "$(symbol-snippet)"
       }
     ],
     "menus": {
@@ -73,9 +169,109 @@
       ],
       "editor/context": [
         {
-          "command": "fumadocs.openPreview",
+          "submenu": "fumadocs.contextMenu",
           "when": "editorLangId == mdx || editorLangId == markdown || resourceExtname == .md || resourceExtname == .mdx",
           "group": "navigation@0"
+        }
+      ],
+      "fumadocs.contextMenu": [
+        {
+          "command": "fumadocs.openPreview",
+          "group": "1_preview@1"
+        },
+        {
+          "command": "fumadocs.docsTools.addImage",
+          "when": "fumadocs.docsToolsEnabled",
+          "group": "2_insert@1"
+        },
+        {
+          "submenu": "fumadocs.insertComponentMenu",
+          "when": "fumadocs.docsToolsEnabled",
+          "group": "2_insert@2"
+        }
+      ],
+      "fumadocs.insertComponentMenu": [
+        {
+          "command": "fumadocs.insertComponent.accordions",
+          "group": "components@1"
+        },
+        {
+          "command": "fumadocs.insertComponent.banner",
+          "group": "components@2"
+        },
+        {
+          "command": "fumadocs.insertComponent.callout",
+          "group": "components@3"
+        },
+        {
+          "command": "fumadocs.insertComponent.cards",
+          "group": "components@4"
+        },
+        {
+          "command": "fumadocs.insertComponent.code-block-tabs",
+          "group": "components@5"
+        },
+        {
+          "command": "fumadocs.insertComponent.files",
+          "group": "components@6"
+        },
+        {
+          "command": "fumadocs.insertComponent.inline-toc",
+          "group": "components@7"
+        },
+        {
+          "command": "fumadocs.insertComponent.steps",
+          "group": "components@8"
+        },
+        {
+          "command": "fumadocs.insertComponent.tabs",
+          "group": "components@9"
+        },
+        {
+          "command": "fumadocs.insertComponent.type-table",
+          "group": "components@10"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "fumadocs.insertComponent.accordions",
+          "when": "false"
+        },
+        {
+          "command": "fumadocs.insertComponent.banner",
+          "when": "false"
+        },
+        {
+          "command": "fumadocs.insertComponent.callout",
+          "when": "false"
+        },
+        {
+          "command": "fumadocs.insertComponent.cards",
+          "when": "false"
+        },
+        {
+          "command": "fumadocs.insertComponent.code-block-tabs",
+          "when": "false"
+        },
+        {
+          "command": "fumadocs.insertComponent.files",
+          "when": "false"
+        },
+        {
+          "command": "fumadocs.insertComponent.inline-toc",
+          "when": "false"
+        },
+        {
+          "command": "fumadocs.insertComponent.steps",
+          "when": "false"
+        },
+        {
+          "command": "fumadocs.insertComponent.tabs",
+          "when": "false"
+        },
+        {
+          "command": "fumadocs.insertComponent.type-table",
+          "when": "false"
         }
       ],
       "webview/title": [
@@ -106,6 +302,13 @@
             "content"
           ],
           "description": "Directory names treated as a Fumadocs content root when resolving the nearest root of the file being previewed."
+        },
+        "fumadocs.previewPort": {
+          "type": "number",
+          "default": 6969,
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Preferred port for the bundled Fumadocs preview server. If the port is already in use by another process, you'll be asked whether to stop that process or fall back to a free port."
         }
       }
     }

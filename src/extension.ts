@@ -1,8 +1,10 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import { PreviewCodeLensProvider } from "./codelens";
+import { ComponentEditCodeLensProvider } from "./componentEdit";
 import { registerEditorActions } from "./editorActions";
 import { registerEditorBanner } from "./editorBanner";
+import { registerDocsToolsView } from "./docsTools/docsToolsView";
 import { DevServerManager } from "./devServer";
 import { PreviewPanel } from "./preview";
 import { computeSlugPath, findContentRoot } from "./contentRoot";
@@ -11,6 +13,11 @@ import { isMarkdown } from "./markdown";
 let manager: DevServerManager;
 let output: vscode.OutputChannel;
 let currentRoot: string | undefined;
+let currentFile: string | undefined;
+let scrollDebounce: ReturnType<typeof setTimeout> | undefined;
+let reloadDebounce: ReturnType<typeof setTimeout> | undefined;
+let contentWatcher: vscode.FileSystemWatcher | undefined;
+let watchedRoot: string | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   output = vscode.window.createOutputChannel("Fumadocs Preview");
@@ -18,6 +25,12 @@ export function activate(context: vscode.ExtensionContext): void {
   manager = new DevServerManager(webappDir, output);
 
   const codeLensProvider = new PreviewCodeLensProvider();
+  const componentLensProvider = new ComponentEditCodeLensProvider();
+  let componentLensDebounce: ReturnType<typeof setTimeout> | undefined;
+  const refreshComponentLenses = (): void => {
+    if (componentLensDebounce) clearTimeout(componentLensDebounce);
+    componentLensDebounce = setTimeout(() => componentLensProvider.refresh(), 250);
+  };
 
   context.subscriptions.push(
     output,
@@ -26,6 +39,13 @@ export function activate(context: vscode.ExtensionContext): void {
       [{ scheme: "file", pattern: "**/*.{md,mdx}" }],
       codeLensProvider,
     ),
+    vscode.languages.registerCodeLensProvider(
+      [{ scheme: "file", pattern: "**/*.{md,mdx}" }],
+      componentLensProvider,
+    ),
+    vscode.workspace.onDidChangeTextDocument((event) => {
+      if (isMarkdown(event.document)) refreshComponentLenses();
+    }),
     vscode.commands.registerCommand(
       "fumadocs.openPreview",
       (uri?: vscode.Uri) => openPreview(uri),
@@ -38,11 +58,17 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!isMarkdown(editor.document)) return;
       void updatePreviewFor(editor.document.uri.fsPath);
     }),
+    vscode.window.onDidChangeTextEditorSelection((event) => {
+      if (!PreviewPanel.exists) return;
+      if (!isMarkdown(event.textEditor.document)) return;
+      if (event.textEditor.document.uri.fsPath !== currentFile) return;
+      syncScrollToCursor(event.textEditor);
+    }),
     vscode.workspace.onDidSaveTextDocument((doc) => {
       if (!PreviewPanel.exists || !currentRoot) return;
       const file = doc.uri.fsPath;
       if (file.startsWith(currentRoot) || isMarkdown(doc)) {
-        PreviewPanel.createOrShow().reload();
+        scheduleReload();
       }
     }),
     vscode.workspace.onDidOpenTextDocument((doc) => {
@@ -52,10 +78,61 @@ export function activate(context: vscode.ExtensionContext): void {
 
   registerEditorActions(context);
   registerEditorBanner(context);
+  registerDocsToolsView(context);
 }
 
 export function deactivate(): void {
   manager?.dispose();
+  contentWatcher?.dispose();
+  contentWatcher = undefined;
+  watchedRoot = undefined;
+  if (scrollDebounce) clearTimeout(scrollDebounce);
+  if (reloadDebounce) clearTimeout(reloadDebounce);
+}
+
+/**
+ * Watch the active content root for changes made on disk — including edits
+ * from outside this VSCode window (other editors, scripts, git checkouts) —
+ * and reload the preview. The runtime renderer reads content as data rather
+ * than importing it, so Next.js never sees these files and won't hot-refresh;
+ * this watcher is what makes external edits show up.
+ */
+function watchContentRoot(root: string): void {
+  if (watchedRoot === root && contentWatcher) return;
+  contentWatcher?.dispose();
+  watchedRoot = root;
+  const pattern = new vscode.RelativePattern(
+    vscode.Uri.file(root),
+    "**/*.{md,mdx,json,jsonc,png,jpg,jpeg,gif,svg,webp,avif}",
+  );
+  const watcher = vscode.workspace.createFileSystemWatcher(pattern);
+  watcher.onDidChange(() => scheduleReload());
+  watcher.onDidCreate(() => scheduleReload());
+  watcher.onDidDelete(() => scheduleReload());
+  contentWatcher = watcher;
+}
+
+/**
+ * Debounced preview reload, shared by the save handler and the filesystem
+ * watcher so a single save (which fires both) only reloads once.
+ */
+function scheduleReload(): void {
+  if (!PreviewPanel.exists) return;
+  if (reloadDebounce) clearTimeout(reloadDebounce);
+  reloadDebounce = setTimeout(() => {
+    if (!PreviewPanel.exists) return;
+    PreviewPanel.createOrShow().reload();
+  }, 120);
+}
+
+/** Debounced sync of the editor's cursor line into the preview. */
+function syncScrollToCursor(editor: vscode.TextEditor): void {
+  if (scrollDebounce) clearTimeout(scrollDebounce);
+  const line = editor.selection.active.line + 1;
+  scrollDebounce = setTimeout(() => {
+    if (!PreviewPanel.exists) return;
+    PreviewPanel.createOrShow().scrollToLine(line);
+  }, 80);
 }
 
 async function openPreview(uri?: vscode.Uri): Promise<void> {
@@ -90,14 +167,30 @@ function openPreviewInBrowser(): void {
   void vscode.env.openExternal(vscode.Uri.parse(url));
 }
 
+/** Stop the dev server and rebuild the preview for the current file. */
+async function restartPreview(): Promise<void> {
+  manager.stop();
+  const target = currentFile ?? vscode.window.activeTextEditor?.document.uri.fsPath;
+  if (!target) {
+    void vscode.window.showWarningMessage(
+      "Nothing to restart — open a Markdown or MDX file and start a preview first.",
+    );
+    return;
+  }
+  await updatePreviewFor(target);
+}
+
 async function updatePreviewFor(filePath: string): Promise<void> {
   const panel = PreviewPanel.createOrShow();
+  panel.setRestartHandler(() => void restartPreview());
   const contentDirNames = vscode.workspace
     .getConfiguration("fumadocs")
     .get<string[]>("contentDirNames", ["content"]);
 
   const root = findContentRoot(filePath, contentDirNames);
   currentRoot = root;
+  currentFile = filePath;
+  watchContentRoot(root);
   const slug = computeSlugPath(root, filePath);
   const route = slug === "/" ? "/" : slug;
 
@@ -108,6 +201,12 @@ async function updatePreviewFor(filePath: string): Promise<void> {
     );
     panel.showProgress(route, "Loading page…");
     panel.navigate(baseUrl, slug, path.basename(filePath));
+    // Seed the cursor line so the freshly loaded page scrolls to where the
+    // user is; the webview replays this once the page signals it's ready.
+    const editor = vscode.window.activeTextEditor;
+    if (editor?.document.uri.fsPath === filePath) {
+      panel.scrollToLine(editor.selection.active.line + 1);
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     output.appendLine(`[error] ${message}`);

@@ -6,6 +6,7 @@ import { Inter } from 'next/font/google';
 import { buildSource } from '@/lib/source';
 import { getContentRoot } from '@/lib/content-root';
 import { getGitRepoName } from '@/lib/git-repo-name';
+import { ScrollSync } from '@/components/scroll-sync';
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -34,6 +35,7 @@ export default function RootLayout({
             {children}
           </DocsLayout>
         </RootProvider>
+        <ScrollSync />
       </body>
     </html>
   );
