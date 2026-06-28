@@ -57,6 +57,8 @@ export class DevServerManager {
   private overrides: Record<string, string> = {};
   /** Rolling tail of recent output, surfaced in the preview's error view. */
   private logBuffer = "";
+  /** Login-shell PATH (nvm/fnm/asdf); resolved once per manager. */
+  private shellEnv: NodeJS.ProcessEnv | undefined;
 
   constructor(
     private readonly webappDir: string,
@@ -112,9 +114,10 @@ export class DevServerManager {
   }
 
   private async start(onProgress?: ProgressFn): Promise<string> {
-    await this.ensureNode(onProgress);
-    await this.ensureDependencies(onProgress);
-    await this.ensureSharp(onProgress);
+    const env = await this.toolchainEnv();
+    await this.ensureNode(onProgress, env);
+    await this.ensureDependencies(onProgress, env);
+    await this.ensureSharp(onProgress, env);
     this.killStaleServer();
 
     const port = await this.resolvePort(onProgress);
@@ -125,7 +128,7 @@ export class DevServerManager {
     const proc = cp.spawn(bin, ["dev", "-p", String(port), "-H", "127.0.0.1"], {
       cwd: this.webappDir,
       env: {
-        ...process.env,
+        ...env,
         BROWSER: "none",
         NEXT_TELEMETRY_DISABLED: "1",
       },
@@ -150,23 +153,48 @@ export class DevServerManager {
   }
 
   /**
-   * Verify Node.js is on PATH and new enough to run the bundled renderer.
-   * Throws a {@link ToolchainError} (with an install link) otherwise, so the
-   * preview shows actionable instructions instead of a cryptic spawn failure.
+   * Env with the user's login-shell PATH so nvm/fnm/asdf Node installs are
+   * visible to spawned processes (the extension host often lacks them).
    */
-  private async ensureNode(onProgress?: ProgressFn): Promise<void> {
+  private toolchainEnv(): Promise<NodeJS.ProcessEnv> {
+    if (this.shellEnv) return Promise.resolve(this.shellEnv);
+    return resolveLoginShellEnv().then((env) => {
+      this.shellEnv = env;
+      return env;
+    });
+  }
+
+  /**
+   * Verify npm is runnable (Node.js is installed) and new enough for the
+   * bundled renderer. Throws a {@link ToolchainError} otherwise.
+   */
+  private async ensureNode(
+    onProgress: ProgressFn | undefined,
+    env: NodeJS.ProcessEnv,
+  ): Promise<void> {
     onProgress?.("Checking for Node.js…");
-    const version = await nodeVersion();
-    if (version === null) {
-      this.recordLine("[toolchain] Node.js was not found on PATH");
+    const npm = await runCommand("npm", ["-v"], env);
+    if (npm.code !== 0) {
+      this.recordLine("[toolchain] npm was not found on PATH");
       throw new ToolchainError(
-        "Node.js is required to run the Fumadocs preview, but it wasn't found on your PATH. Install Node.js (it includes npm), then restart the preview.",
+        "Node.js is required to run the Fumadocs preview, but npm wasn't found on your PATH. Install Node.js (it includes npm), then restart the preview.",
         NODE_DOWNLOAD_URL,
         "Install Node.js",
       );
     }
 
-    this.recordLine(`[toolchain] using Node.js ${version}`);
+    const node = await runCommand("node", ["-v"], env);
+    const version = node.stdout.trim();
+    if (node.code !== 0 || !version) {
+      this.recordLine("[toolchain] npm works but node was not found on PATH");
+      throw new ToolchainError(
+        "npm is available, but the Node.js runtime wasn't found on your PATH. Reinstall Node.js, then restart the preview.",
+        NODE_DOWNLOAD_URL,
+        "Install Node.js",
+      );
+    }
+
+    this.recordLine(`[toolchain] using npm ${npm.stdout.trim()}, Node.js ${version}`);
     const major = parseMajorVersion(version);
     if (major !== null && major < MIN_NODE_MAJOR) {
       throw new ToolchainError(
@@ -335,7 +363,10 @@ export class DevServerManager {
     return fs.existsSync(path.join(this.webappDir, "node_modules", ".bin"));
   }
 
-  private ensureDependencies(onProgress?: ProgressFn): Promise<void> {
+  private ensureDependencies(
+    onProgress: ProgressFn | undefined,
+    env: NodeJS.ProcessEnv,
+  ): Promise<void> {
     if (this.dependenciesInstalled) return Promise.resolve();
     if (this.installPromise) {
       onProgress?.("Waiting for renderer dependencies to finish installing…");
@@ -345,7 +376,7 @@ export class DevServerManager {
     onProgress?.("Installing renderer dependencies (first run, this can take a minute)…");
     // Reset the cached promise on failure so a retry (e.g. after the user
     // installs Node.js or a package manager) actually re-runs the install.
-    const install = this.installDependencies().catch((err) => {
+    const install = this.installDependencies(env).catch((err) => {
       this.installPromise = undefined;
       throw err;
     });
@@ -353,9 +384,9 @@ export class DevServerManager {
     return install;
   }
 
-  private async installDependencies(): Promise<void> {
+  private async installDependencies(env: NodeJS.ProcessEnv): Promise<void> {
     const { command, args } = this.installCommand();
-    await this.ensurePackageManager(command);
+    await this.ensurePackageManager(command, env);
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
@@ -363,7 +394,7 @@ export class DevServerManager {
           "Fumadocs Preview: installing renderer dependencies (first run)…",
         cancellable: false,
       },
-      () => this.runInstall(command, args),
+      () => this.runInstall(command, args, env),
     );
   }
 
@@ -372,8 +403,11 @@ export class DevServerManager {
    * Node.js bundles npm, so a missing npm usually means a broken/partial Node
    * install — point at the Node.js docs rather than failing opaquely.
    */
-  private async ensurePackageManager(command: string): Promise<void> {
-    if (await commandExists(command)) return;
+  private async ensurePackageManager(
+    command: string,
+    env: NodeJS.ProcessEnv,
+  ): Promise<void> {
+    if (await commandExists(command, env)) return;
     this.recordLine(`[toolchain] "${command}" was not found on PATH`);
     throw new ToolchainError(
       `Node.js is installed, but "${command}" — needed to install the preview's dependencies — wasn't found on your PATH.`,
@@ -389,9 +423,12 @@ export class DevServerManager {
    * which otherwise surfaces as an opaque render failure. On failure we throw a
    * {@link ToolchainError} with platform-specific fix-it instructions.
    */
-  private async ensureSharp(onProgress?: ProgressFn): Promise<void> {
+  private async ensureSharp(
+    onProgress: ProgressFn | undefined,
+    env: NodeJS.ProcessEnv,
+  ): Promise<void> {
     onProgress?.("Checking image support (sharp)…");
-    const result = await probeSharp(this.webappDir);
+    const result = await probeSharp(this.webappDir, env);
     if (result.ok) {
       this.recordLine("[toolchain] sharp loaded successfully");
       return;
@@ -404,13 +441,17 @@ export class DevServerManager {
     );
   }
 
-  private runInstall(command: string, args: string[]): Promise<void> {
+  private runInstall(
+    command: string,
+    args: string[],
+    env: NodeJS.ProcessEnv,
+  ): Promise<void> {
     this.recordLine(`[install] ${command} ${args.join(" ")}`);
 
     return new Promise<void>((resolve, reject) => {
       const proc = cp.spawn(command, args, {
         cwd: this.webappDir,
-        env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1" },
+        env: { ...env, NEXT_TELEMETRY_DISABLED: "1" },
         shell: process.platform === "win32",
       });
       proc.stdout?.on("data", (d) => this.record(`[install] ${d}`));
@@ -549,36 +590,68 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Resolve `node --version` (e.g. "v22.1.0"), or null if Node isn't runnable. */
-function nodeVersion(): Promise<string | null> {
-  return new Promise((resolve) => {
-    let out = "";
-    const proc = cp.spawn("node", ["--version"], {
-      shell: process.platform === "win32",
-      windowsHide: true,
-    });
-    proc.on("error", () => resolve(null));
-    proc.stdout?.on("data", (d) => (out += String(d)));
-    proc.on("exit", (code) => resolve(code === 0 ? out.trim() : null));
-  });
-}
-
 /** Parse the major version from a `vX.Y.Z` string; null if unrecognized. */
 function parseMajorVersion(version: string): number | null {
   const match = /^v?(\d+)\./.exec(version.trim());
   return match ? Number.parseInt(match[1], 10) : null;
 }
 
-/** True if `<command> --version` runs successfully (i.e. it's on PATH). */
-function commandExists(command: string): Promise<boolean> {
+/**
+ * Merge login-shell env vars into `process.env`. VS Code's extension host is
+ * often launched without nvm/fnm/asdf on PATH; a login+interactive shell has it.
+ */
+function resolveLoginShellEnv(): Promise<NodeJS.ProcessEnv> {
+  if (process.platform === "win32") {
+    return Promise.resolve({ ...process.env });
+  }
+
+  const shell = process.env.SHELL || "/bin/bash";
   return new Promise((resolve) => {
-    const proc = cp.spawn(command, ["--version"], {
+    cp.exec(
+      `${shell} -l -i -c "env"`,
+      { env: process.env, timeout: 15_000, maxBuffer: 1024 * 1024 },
+      (err, stdout) => {
+        if (err) {
+          resolve({ ...process.env });
+          return;
+        }
+        const merged = { ...process.env };
+        for (const line of stdout.split("\n")) {
+          const eq = line.indexOf("=");
+          if (eq <= 0) continue;
+          merged[line.slice(0, eq)] = line.slice(eq + 1);
+        }
+        resolve(merged);
+      },
+    );
+  });
+}
+
+/** Run a command with the given env; returns exit code and captured stdout. */
+function runCommand(
+  command: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+): Promise<{ code: number | null; stdout: string }> {
+  return new Promise((resolve) => {
+    let out = "";
+    const proc = cp.spawn(command, args, {
+      env,
       shell: process.platform === "win32",
       windowsHide: true,
     });
-    proc.on("error", () => resolve(false));
-    proc.on("exit", (code) => resolve(code === 0));
+    proc.on("error", () => resolve({ code: null, stdout: "" }));
+    proc.stdout?.on("data", (d) => (out += String(d)));
+    proc.on("exit", (code) => resolve({ code, stdout: out.trim() }));
   });
+}
+
+/** True if `<command> --version` runs successfully (i.e. it's on PATH). */
+function commandExists(
+  command: string,
+  env: NodeJS.ProcessEnv,
+): Promise<boolean> {
+  return runCommand(command, ["--version"], env).then((r) => r.code === 0);
 }
 
 /**
@@ -588,6 +661,7 @@ function commandExists(command: string): Promise<boolean> {
  */
 function probeSharp(
   webappDir: string,
+  env: NodeJS.ProcessEnv,
 ): Promise<{ ok: boolean; error: string }> {
   const sharpEntry = path.join(webappDir, "node_modules", "sharp");
   // Loading the module triggers the native binding load; that's the real test.
@@ -596,6 +670,7 @@ function probeSharp(
     let err = "";
     const proc = cp.spawn("node", ["-e", code], {
       cwd: webappDir,
+      env,
       windowsHide: true,
     });
     proc.on("error", (e) => resolve({ ok: false, error: String(e) }));
