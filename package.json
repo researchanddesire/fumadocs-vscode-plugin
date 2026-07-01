@@ -2,7 +2,7 @@
   "name": "fumadocs-vscode-plugin",
   "displayName": "Fumadocs Preview",
   "description": "Live-preview any MDX/Markdown file or folder with a real Fumadocs site, rendered side-by-side inside VSCode.",
-  "version": "1.2.1",
+  "version": "1.2.7",
   "publisher": "researchanddesire",
   "license": "MIT",
   "repository": {
@@ -427,6 +427,7 @@
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.85.0",
     "@vscode/vsce": "^3.2.1",
+    "cropperjs": "^1.6.2",
     "esbuild": "^0.24.2",
     "typescript": "^5.7.2"
   }

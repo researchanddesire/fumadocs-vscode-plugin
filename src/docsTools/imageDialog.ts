@@ -20,10 +20,32 @@ export interface ImageInsertPayload {
   fileName: string;
   subfolder: string;
   alt: string;
+  /** Optional intrinsic width attribute for the `<img>` tag (MDX only). */
+  width?: number;
+  /** Optional intrinsic height attribute for the `<img>` tag (MDX only). */
+  height?: number;
   /** Edit mode: existing src, reused (no rewrite) when the image is unchanged. */
   keepSrc?: string;
   /** Whether the image bytes/crop/compression actually changed. */
   dirty?: boolean;
+  /** Pristine (pre-crop, pre-compression) source, cached for later re-editing. */
+  originalDataUrl?: string;
+  /** Crop rectangle (natural px) used, cached so the crop can be reverted. */
+  crop?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    rotate?: number;
+    scaleX?: number;
+    scaleY?: number;
+  };
+  /** Max-width cap used for the export, cached for re-editing. */
+  maxWidth?: number;
+  /** Quality (0-100) used for the export, cached for re-editing. */
+  quality?: number;
+  /** Output MIME used for the export, cached for re-editing. */
+  format?: string;
 }
 
 /** Open a native file picker and return the chosen image as a data URL. */
@@ -134,14 +156,41 @@ export function resolveImageSrc(
   return `./${subfolder}/${destName}`.replaceAll("\\", "/");
 }
 
-/** Build image markup, preferring `<img>` for MDX and `![]()` for Markdown. */
+/**
+ * Resolve the saved `src` to the absolute file path it was written to, for use
+ * as a cache key. Returns null for remote URLs, data URLs, and public-root
+ * (`/...`) paths, which the builder-managed cache doesn't track.
+ */
+export function absImagePath(src: string, mdxFilePath: string): string | null {
+  if (!src || isRemote(src) || src.startsWith("data:") || src.startsWith("/")) {
+    return null;
+  }
+  return path.resolve(path.dirname(mdxFilePath), src);
+}
+
+/**
+ * Build image markup, preferring `<img>` for MDX and `![]()` for Markdown.
+ *
+ * `width`/`height` are emitted as intrinsic-size attributes on the `<img>` tag
+ * (used by Next.js Image Optimization, the same attributes Fumadocs'
+ * remark-image adds automatically). They are dropped for Markdown `![]()`,
+ * which can't carry them.
+ */
 export function buildImageMarkup(
   src: string,
   alt: string,
   useImgTag: boolean,
+  width?: number,
+  height?: number,
 ): string {
   const safeAlt = alt.replace(/"/g, '\\"');
-  if (useImgTag) return `<img src="${src}" alt="${safeAlt}" />`;
+  if (useImgTag) {
+    const dims =
+      width && height && width > 0 && height > 0
+        ? ` width="${Math.round(width)}" height="${Math.round(height)}"`
+        : "";
+    return `<img src="${src}" alt="${safeAlt}"${dims} />`;
+  }
   return `![${alt}](${src})`;
 }
 

@@ -2,13 +2,17 @@ import * as vscode from "vscode";
 import { isMarkdown } from "./markdown";
 
 /** A detected image reference in an MD/MDX document. */
-interface ImageHit {
+export interface ImageHit {
   /** Source path or URL. */
   src: string;
   /** Alt text (may be empty). */
   alt: string;
   /** "img" = JSX `<img>` tag; "md" = Markdown `![]()`. */
   kind: "img" | "md";
+  /** Existing `width` attribute (JSX `<img>` only). */
+  width: string;
+  /** Existing `height` attribute (JSX `<img>` only). */
+  height: string;
   /** Range covering the full reference (replaced when saving edits). */
   range: vscode.Range;
 }
@@ -24,8 +28,17 @@ function attr(src: string, name: string): string | null {
   return m ? m[1] : null;
 }
 
+/** Read a numeric JSX attribute, supporting `name="10"` and `name={10}`. */
+function numAttr(src: string, name: string): string {
+  const m = new RegExp(
+    String.raw`${name}\s*=\s*(?:"(\d+)"|\{\s*(\d+)\s*\})`,
+    "i",
+  ).exec(src);
+  return m ? m[1] ?? m[2] ?? "" : "";
+}
+
 /** Scan a document for image references outside fenced code blocks. */
-function findImages(document: vscode.TextDocument): ImageHit[] {
+export function findImages(document: vscode.TextDocument): ImageHit[] {
   const hits: ImageHit[] = [];
   let inCode = false;
 
@@ -45,6 +58,8 @@ function findImages(document: vscode.TextDocument): ImageHit[] {
         src: attr(tag, "src") || "",
         alt: attr(tag, "alt") || "",
         kind: "img",
+        width: numAttr(tag, "width"),
+        height: numAttr(tag, "height"),
         range: new vscode.Range(line, m.index, line, m.index + tag.length),
       });
     }
@@ -55,6 +70,8 @@ function findImages(document: vscode.TextDocument): ImageHit[] {
         alt: m[1] || "",
         src: m[2] || "",
         kind: "md",
+        width: "",
+        height: "",
         range: new vscode.Range(line, m.index, line, m.index + m[0].length),
       });
     }
@@ -92,7 +109,15 @@ export class ImageEditCodeLensProvider implements vscode.CodeLensProvider {
         title: "$(device-camera) Edit image",
         tooltip: "Open this image in the Fumadocs image builder",
         command: "fumadocs.editImage",
-        arguments: [document.uri, hit.range, hit.src, hit.alt, hit.kind],
+        arguments: [
+          document.uri,
+          hit.range,
+          hit.src,
+          hit.alt,
+          hit.kind,
+          hit.width,
+          hit.height,
+        ],
       });
     });
   }

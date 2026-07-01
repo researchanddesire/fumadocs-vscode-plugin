@@ -132,11 +132,12 @@ function rehypeResolveImages() {
 
 /** Shared runtime MDX compiler with the Fumadocs preset. */
 export const compiler = createCompiler({
-  // Disable Fumadocs' built-in remark-image. It resolves images against this
-  // app's `./public` (wrong base for previewed content) and fetches remote
-  // images to measure them (fails offline / on 404). `rehypeResolveImages`
-  // owns image src resolution instead.
-  remarkImageOptions: false,
+  // Enable Fumadocs' remark-image so markdown images get width/height like
+  // production (Next.js Image Optimization). Kept preview-safe: `external:false`
+  // avoids remote size fetches (offline/404), `onError:'ignore'` skips sizing
+  // for paths it can't resolve here. `rehypeResolveImages` still owns src
+  // rewriting to the preview-image route.
+  remarkImageOptions: { external: false, onError: "ignore" },
   remarkPlugins: (plugins) => [remarkStripEsm, ...plugins],
   rehypePlugins: (plugins) => [
     rehypeSourceLines,

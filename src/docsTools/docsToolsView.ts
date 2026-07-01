@@ -1,7 +1,9 @@
+import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
 import { FUMADOCS_COMPONENTS, getComponent } from "./componentSnippets";
 import {
+  absImagePath,
   buildImageMarkup,
   fetchRemoteImage,
   ImageInsertPayload,
@@ -9,9 +11,15 @@ import {
   readLocalImageForSrc,
   resolveImageSrc,
 } from "./imageDialog";
+import {
+  ImageEditSettings,
+  loadOriginal,
+  storeOriginal,
+} from "./imageCache";
 import { insertBlockBelowCursor } from "./insertAtCursor";
 import { isMarkdownEditor } from "../markdown";
 import { getDocsToolsContext } from "./state";
+import { findImages } from "../imageEdit";
 
 /** The component block currently being built/edited live in the document. */
 interface ComponentSession {
@@ -27,6 +35,7 @@ interface ComponentSession {
 interface ImageSession {
   uri: vscode.Uri;
   range: vscode.Range;
+  src: string;
   /** Whether the source was a JSX `<img>` tag (vs Markdown `![]()`). */
   useImgTag: boolean;
 }
@@ -56,6 +65,10 @@ export class DocsToolsViewProvider implements vscode.WebviewViewProvider {
         alt: string;
         kind: "img" | "md";
         dataUrl: string | null;
+        width: string | null;
+        height: string | null;
+        /** Settings from the cached original, replayed in the builder. */
+        cache: ImageEditSettings | null;
       }
     | undefined;
   /** Live-edit session for the component currently open in the builder. */
@@ -68,6 +81,10 @@ export class DocsToolsViewProvider implements vscode.WebviewViewProvider {
   private imageSession: ImageSession | undefined;
   /** Serializes document edits so debounced applies never interleave. */
   private queue: Promise<void> = Promise.resolve();
+  /** Serializes image applies so repeated crop/slider releases stay ordered. */
+  private imageQueue: Promise<void> = Promise.resolve();
+
+  constructor(private readonly extensionPath: string) {}
 
   resolveWebviewView(
     webviewView: vscode.WebviewView,
@@ -80,7 +97,7 @@ export class DocsToolsViewProvider implements vscode.WebviewViewProvider {
       enableScripts: true,
       localResourceRoots: [],
     };
-    webviewView.webview.html = sidebarHtml();
+    webviewView.webview.html = sidebarHtml(this.extensionPath);
 
     webviewView.webview.onDidReceiveMessage((msg: SidebarMessage) =>
       this.handleMessage(msg),
@@ -138,6 +155,9 @@ export class DocsToolsViewProvider implements vscode.WebviewViewProvider {
         return true;
       case "imageInsert":
         if (msg.payload) void this.handleImageInsert(msg.payload);
+        return true;
+      case "imageLiveApply":
+        if (msg.payload) this.enqueueImageLiveApply(msg.payload);
         return true;
       case "imageCancel":
         this.clearImageSession();
@@ -208,16 +228,25 @@ export class DocsToolsViewProvider implements vscode.WebviewViewProvider {
     src: string,
     alt: string,
     kind: "img" | "md",
+    width?: string,
+    height?: string,
   ): void {
-    const loaded = readLocalImageForSrc(src, uri.fsPath);
-    this.imageSession = { uri, range, useImgTag: kind === "img" };
+    // Prefer the cached pristine original (so the crop can be reverted and
+    // quality changed without compounding loss); fall back to the on-disk file.
+    const abs = absImagePath(src, uri.fsPath);
+    const cached = abs ? loadOriginal(abs) : null;
+    const loaded = cached ? null : readLocalImageForSrc(src, uri.fsPath);
+    this.imageSession = { uri, range, src, useImgTag: kind === "img" };
     this.pendingImageEditor = undefined;
     this.pendingImage = {
       mode: "edit",
       src,
       alt,
       kind,
-      dataUrl: loaded?.dataUrl ?? null,
+      dataUrl: cached?.dataUrl ?? loaded?.dataUrl ?? null,
+      width: width ?? null,
+      height: height ?? null,
+      cache: cached?.settings ?? null,
     };
     void vscode.commands.executeCommand("fumadocs.docsTools.focus");
     this.flushBuilder();
@@ -259,6 +288,25 @@ export class DocsToolsViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  private enqueueImageLiveApply(payload: ImageInsertPayload): void {
+    this.imageQueue = this.imageQueue
+      .then(() => this.handleImageLiveApply(payload))
+      .catch(() => undefined);
+  }
+
+  private async handleImageLiveApply(payload: ImageInsertPayload): Promise<void> {
+    try {
+      if (!this.imageSession) {
+        throw new Error("No image edit is active.");
+      }
+      const src = await this.applyImageEdit(payload, this.imageSession, false);
+      void this.view?.webview.postMessage({ type: "imageApplied", src });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      void this.view?.webview.postMessage({ type: "imageError", message });
+    }
+  }
+
   private async applyImageInsert(payload: ImageInsertPayload): Promise<void> {
     const editor = this.pendingImageEditor ?? vscode.window.activeTextEditor;
     if (!isMarkdownEditor(editor)) {
@@ -268,7 +316,14 @@ export class DocsToolsViewProvider implements vscode.WebviewViewProvider {
     if (!src) throw new Error("No image source provided.");
     const useImgTag =
       path.extname(editor.document.uri.fsPath).toLowerCase() === ".mdx";
-    const markup = buildImageMarkup(src, payload.alt, useImgTag);
+    const markup = buildImageMarkup(
+      src,
+      payload.alt,
+      useImgTag,
+      payload.width,
+      payload.height,
+    );
+    this.cacheOriginal(payload, src, editor.document.uri.fsPath);
     await insertBlockBelowCursor(markup, editor);
     void vscode.window.showInformationMessage(`Image inserted: ${src}`);
   }
@@ -276,12 +331,44 @@ export class DocsToolsViewProvider implements vscode.WebviewViewProvider {
   private async applyImageEdit(
     payload: ImageInsertPayload,
     session: ImageSession,
-  ): Promise<void> {
+    notify = true,
+  ): Promise<string> {
     const src = resolveImageSrc(payload, session.uri.fsPath);
     if (!src) throw new Error("No image source provided.");
-    const markup = buildImageMarkup(src, payload.alt, session.useImgTag);
-    await replaceRange(session.uri, session.range, markup);
-    void vscode.window.showInformationMessage(`Image updated: ${src}`);
+    const markup = buildImageMarkup(
+      src,
+      payload.alt,
+      session.useImgTag,
+      payload.width,
+      payload.height,
+    );
+    this.cacheOriginal(payload, src, session.uri.fsPath);
+    const range = await resolveImageEditRange(session);
+    const next = await replaceRange(session.uri, range, markup);
+    if (next) {
+      session.range = next;
+      session.src = src;
+    }
+    if (notify) void vscode.window.showInformationMessage(`Image updated: ${src}`);
+    return src;
+  }
+
+  /** Cache the pristine source + settings for a saved file, for later editing. */
+  private cacheOriginal(
+    payload: ImageInsertPayload,
+    src: string,
+    mdxFilePath: string,
+  ): void {
+    if (payload.mode !== "file" || !payload.originalDataUrl) return;
+    const abs = absImagePath(src, mdxFilePath);
+    if (!abs) return;
+    const settings: ImageEditSettings = {
+      crop: payload.crop,
+      maxWidth: payload.maxWidth,
+      quality: payload.quality,
+      format: payload.format,
+    };
+    storeOriginal(abs, payload.originalDataUrl, settings);
   }
 
   private flushBuilder(): void {
@@ -430,6 +517,26 @@ async function replaceRange(
   return new vscode.Range(range.start, new vscode.Position(endLine, endChar));
 }
 
+async function resolveImageEditRange(
+  session: ImageSession,
+): Promise<vscode.Range> {
+  const doc = await vscode.workspace.openTextDocument(session.uri);
+  const currentText =
+    session.range.end.line < doc.lineCount ? doc.getText(session.range) : "";
+  if (currentText.includes(session.src)) return session.range;
+
+  const matches = findImages(doc).filter((hit) => hit.src === session.src);
+  if (matches.length === 0) return session.range;
+
+  return matches.reduce((nearest, hit) => {
+    const nearestDistance = Math.abs(
+      nearest.range.start.line - session.range.start.line,
+    );
+    const hitDistance = Math.abs(hit.range.start.line - session.range.start.line);
+    return hitDistance < nearestDistance ? hit : nearest;
+  }).range;
+}
+
 /** Delete a block (plus one adjacent blank line) — used to undo a cancelled insert. */
 async function removeBlock(
   uri: vscode.Uri,
@@ -506,7 +613,7 @@ function insertOrConfigure(
 export function registerDocsToolsView(
   context: vscode.ExtensionContext,
 ): DocsToolsViewProvider {
-  const provider = new DocsToolsViewProvider();
+  const provider = new DocsToolsViewProvider(context.extensionPath);
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
@@ -525,7 +632,18 @@ export function registerDocsToolsView(
         src: string,
         alt: string,
         kind: "img" | "md",
-      ) => provider.openImageBuilderForEdit(uri, range, src, alt, kind),
+        width?: string,
+        height?: string,
+      ) =>
+        provider.openImageBuilderForEdit(
+          uri,
+          range,
+          src,
+          alt,
+          kind,
+          width,
+          height,
+        ),
     ),
     vscode.commands.registerCommand("fumadocs.docsTools.addComponent", () =>
       addComponentViaQuickPick(provider),
@@ -566,7 +684,19 @@ export function registerDocsToolsView(
   return provider;
 }
 
-function sidebarHtml(): string {
+/** Read a vendored asset from `media/vendor/`, returning "" if it's missing. */
+function readVendorAsset(extensionPath: string, file: string): string {
+  try {
+    return fs.readFileSync(
+      path.join(extensionPath, "media", "vendor", file),
+      "utf8",
+    );
+  } catch {
+    return "";
+  }
+}
+
+function sidebarHtml(extensionPath: string): string {
   const csp = [
     "default-src 'none'",
     "style-src 'unsafe-inline'",
@@ -575,12 +705,16 @@ function sidebarHtml(): string {
     "connect-src https: http:",
   ].join("; ");
 
+  const cropperCss = readVendorAsset(extensionPath, "cropper.min.css");
+  const cropperJs = readVendorAsset(extensionPath, "cropper.min.js");
+
   return /* html */ `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
 <meta http-equiv="Content-Security-Policy" content="${csp}" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<style>${cropperCss}</style>
 <style>
   * { box-sizing: border-box; }
   html, body {
@@ -855,14 +989,76 @@ function sidebarHtml(): string {
     padding: 6px;
   }
   .img-canvas-wrap[hidden] { display: none; }
-  .img-canvas-wrap canvas, .img-canvas-wrap img {
+  .img-canvas-wrap img {
     max-width: 100%;
     max-height: 268px;
     display: block;
   }
-  .img-canvas-wrap canvas { cursor: crosshair; }
+  #imgCropTarget { display: none; }
+  .img-canvas-wrap.cropping {
+    display: block;
+    height: 260px;
+    min-height: 0;
+    max-height: 260px;
+    padding: 0;
+  }
+  /* Cropper sizes itself to this container when cropping. */
+  .img-canvas-wrap.cropping img { max-height: none; }
+  .crop-tools {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 8px 0 2px;
+  }
+  .crop-tools[hidden] { display: none; }
+  .crop-tools-label {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+    margin-right: 2px;
+  }
+  .aspect-btn.is-active {
+    outline: 1px solid var(--vscode-focusBorder, #3794ff);
+    outline-offset: -1px;
+  }
   .range-val { font-size: 11px; color: var(--vscode-foreground); }
-  .crop-hint { font-size: 11px; color: var(--vscode-descriptionForeground); margin: -4px 0 10px; }
+  .crop-hint { font-size: 11px; color: var(--vscode-descriptionForeground); margin: 6px 0 10px; }
+  .dims-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .dims-row > label { flex: 1 1 80px; margin-bottom: 0; }
+  .dims-row .dims-link {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+    font-size: 12px;
+    padding-bottom: 6px;
+  }
+  .dims-row .dims-link input { width: auto; margin: 0; }
+  .busy-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    color: var(--vscode-descriptionForeground);
+    font-size: 12px;
+    margin-right: auto;
+  }
+  .busy-status[hidden] { display: none; }
+  .busy-dot {
+    width: 12px;
+    height: 12px;
+    border: 2px solid var(--vscode-descriptionForeground);
+    border-top-color: var(--vscode-focusBorder, #3794ff);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
@@ -916,10 +1112,17 @@ function sidebarHtml(): string {
     </div>
     <div class="builder-preview" id="imgPreviewPane" hidden>
       <div class="img-canvas-wrap" id="imgCanvasWrap">
-        <canvas id="imgCanvas"></canvas>
+        <img id="imgCropTarget" alt="" />
         <img id="imgPreview" hidden />
       </div>
-      <p class="crop-hint" id="imgCropHint" hidden>Drag on the image to crop. Use “Reset crop” to start over.</p>
+      <div class="crop-tools" id="imgCropTools" hidden>
+        <span class="crop-tools-label">Aspect</span>
+        <button type="button" class="secondary tiny aspect-btn is-active" data-ratio="free">Free</button>
+        <button type="button" class="secondary tiny aspect-btn" data-ratio="1">1:1</button>
+        <button type="button" class="secondary tiny aspect-btn" data-ratio="1.7777778">16:9</button>
+        <button type="button" class="secondary tiny aspect-btn" data-ratio="1.3333333">4:3</button>
+      </div>
+      <p class="crop-hint" id="imgCropHint" hidden>Drag the handles to adjust the crop. Use “Reset crop” to start over.</p>
     </div>
     <div class="builder-body">
       <div class="dropzone" id="imgDrop">
@@ -961,6 +1164,19 @@ function sidebarHtml(): string {
         <label>Alt text
           <input type="text" id="imgAlt" value="" placeholder="Describe the image" />
         </label>
+        <div class="dims-row">
+          <label>Width (px)
+            <input type="number" id="imgWidth" min="1" step="1" placeholder="auto" />
+          </label>
+          <label>Height (px)
+            <input type="number" id="imgHeight" min="1" step="1" placeholder="auto" />
+          </label>
+          <label class="dims-link">
+            <input type="checkbox" id="imgLinkDims" checked />
+            <span>Lock ratio</span>
+          </label>
+        </div>
+        <p class="crop-hint" id="imgDimsHint">Writes width/height on the &lt;img&gt; tag for Next.js Image Optimization. Auto-filled from the crop; clear to omit.</p>
         <label id="imgSubfolderLabel">Subfolder (relative)
           <input type="text" id="imgSubfolder" value="images" />
         </label>
@@ -968,11 +1184,13 @@ function sidebarHtml(): string {
       <p class="error" id="imgError" hidden style="color:var(--vscode-errorForeground);font-size:12px"></p>
     </div>
     <div class="builder-foot">
+      <span class="busy-status" id="imgBusy" hidden><span class="busy-dot"></span><span id="imgBusyText">Applying…</span></span>
       <button type="button" class="secondary" id="imgCancel">Cancel</button>
       <button type="button" id="imgSave">Insert image</button>
     </div>
   </div>
 
+<script>${cropperJs}</script>
 <script>
 (function () {
   const vscode = acquireVsCodeApi();
@@ -1890,9 +2108,9 @@ function sidebarHtml(): string {
   const imgRemote = document.getElementById('imgRemote');
   const imgPreviewPane = document.getElementById('imgPreviewPane');
   const imgCanvasWrap = document.getElementById('imgCanvasWrap');
-  const imgCanvas = document.getElementById('imgCanvas');
-  const imgCtx = imgCanvas.getContext('2d');
+  const imgCropTarget = document.getElementById('imgCropTarget');
   const imgPreview = document.getElementById('imgPreview');
+  const imgCropTools = document.getElementById('imgCropTools');
   const imgCropHint = document.getElementById('imgCropHint');
   const imgRasterControls = document.getElementById('imgRasterControls');
   const imgFormat = document.getElementById('imgFormat');
@@ -1903,23 +2121,92 @@ function sidebarHtml(): string {
   const imgResetCrop = document.getElementById('imgResetCrop');
   const imgFileName = document.getElementById('imgFileName');
   const imgAlt = document.getElementById('imgAlt');
+  const imgWidth = document.getElementById('imgWidth');
+  const imgHeight = document.getElementById('imgHeight');
+  const imgLinkDims = document.getElementById('imgLinkDims');
   const imgSubfolder = document.getElementById('imgSubfolder');
   const imgSubfolderLabel = document.getElementById('imgSubfolderLabel');
   const imgErrorEl = document.getElementById('imgError');
   const imgCancel = document.getElementById('imgCancel');
   const imgSave = document.getElementById('imgSave');
+  const imgBusy = document.getElementById('imgBusy');
+  const imgBusyText = document.getElementById('imgBusyText');
 
-  let imgSourceImg = null;
-  let imgCrop = null;
-  let imgDragging = false;
-  let imgDragStart = null;
-  let imgDisplayScale = 1;
+  let imgCropper = null;
   let imgIsSvg = false;
   let imgSvgDataUrl = null;
   let imgIsEdit = false;
   let imgEditSrc = '';
   let imgHasSource = false;
   let imgDirty = false;
+  // Width/height fields auto-track the cropped output until the user edits them.
+  let imgDimsAuto = true;
+  let imgLockedAspect = 0;
+  // Pristine source for caching, and a crop rect to restore from the cache.
+  let imgSourceDataUrl = null;
+  let imgPendingCrop = null;
+  let imgBusyCount = 0;
+
+  // Pixel size the saved image will actually have: the crop size, capped by the
+  // max-width slider only when the bytes are re-encoded (dirty). When unchanged,
+  // the original bytes are kept, so the natural crop size is used uncapped.
+  function imgOutputSize() {
+    if (!imgCropper) return null;
+    let d;
+    try { d = imgCropper.getData(true); } catch (e) { return null; }
+    const cw = Math.max(1, Math.round(d.width));
+    const ch = Math.max(1, Math.round(d.height));
+    if (!imgDirty) return { w: cw, h: ch };
+    const maxW = parseInt(imgMaxWidth.value, 10);
+    const scale = Math.min(1, maxW / cw);
+    return { w: Math.max(1, Math.round(cw * scale)), h: Math.max(1, Math.round(ch * scale)) };
+  }
+  function imgRefreshAutoDims() {
+    if (!imgDimsAuto) return;
+    const s = imgOutputSize();
+    if (!s) return;
+    imgWidth.value = String(s.w);
+    imgHeight.value = String(s.h);
+    imgLockedAspect = s.w / s.h;
+  }
+  function imgDimsPayload() {
+    const w = parseInt(imgWidth.value, 10);
+    const h = parseInt(imgHeight.value, 10);
+    return {
+      width: w > 0 ? w : undefined,
+      height: h > 0 ? h : undefined,
+    };
+  }
+  // Pristine source + settings sent with file saves so the original can be
+  // cached and re-loaded later for crop/quality changes.
+  function imgCachePayload() {
+    const p = {
+      originalDataUrl: imgSourceDataUrl || undefined,
+      maxWidth: parseInt(imgMaxWidth.value, 10),
+      quality: parseInt(imgQuality.value, 10),
+      format: imgFormat.value,
+    };
+    if (imgCropper) {
+      try {
+        const d = imgCropper.getData(true);
+        p.crop = { x: d.x, y: d.y, width: d.width, height: d.height, rotate: d.rotate, scaleX: d.scaleX, scaleY: d.scaleY };
+      } catch (e) { /* no crop available */ }
+    }
+    return p;
+  }
+
+  function imgDestroyCropper() {
+    if (imgCropper) { imgCropper.destroy(); imgCropper = null; }
+    imgCropTarget.removeAttribute('src');
+    imgCropTarget.style.display = 'none';
+    imgCanvasWrap.classList.remove('cropping');
+  }
+  function imgSetActiveAspect(btn) {
+    const btns = imgCropTools.querySelectorAll('.aspect-btn');
+    for (let i = 0; i < btns.length; i++) {
+      btns[i].classList.toggle('is-active', btns[i] === btn);
+    }
+  }
 
   function imgSlug(s) {
     return String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
@@ -1927,6 +2214,11 @@ function sidebarHtml(): string {
   function imgSetError(msg) {
     imgErrorEl.hidden = !msg;
     imgErrorEl.textContent = msg || '';
+  }
+  function imgSetBusy(active, text) {
+    imgBusyCount = Math.max(0, imgBusyCount + (active ? 1 : -1));
+    imgBusy.hidden = imgBusyCount === 0;
+    if (text) imgBusyText.textContent = text;
   }
   function imgResetSaveBtn() {
     imgSave.disabled = false;
@@ -1944,17 +2236,24 @@ function sidebarHtml(): string {
   }
 
   function imgResetState() {
-    imgSourceImg = null;
-    imgCrop = null;
-    imgDragging = false;
-    imgDragStart = null;
+    imgDestroyCropper();
     imgIsSvg = false;
     imgSvgDataUrl = null;
     imgHasSource = false;
     imgDirty = false;
+    imgDimsAuto = true;
+    imgLockedAspect = 0;
+    imgWidth.value = '';
+    imgHeight.value = '';
+    imgLinkDims.checked = true;
+    imgSourceDataUrl = null;
+    imgPendingCrop = null;
+    imgBusyCount = 0;
+    imgBusy.hidden = true;
     imgSetError('');
     imgPreviewPane.hidden = true;
     imgCropHint.hidden = true;
+    imgCropTools.hidden = true;
     imgRasterControls.hidden = true;
     imgPreview.hidden = true;
     imgPreview.removeAttribute('src');
@@ -1966,13 +2265,14 @@ function sidebarHtml(): string {
     const remote = imgRemote.checked;
     imgSubfolderLabel.style.display = remote ? 'none' : '';
     if (remote) {
+      imgDestroyCropper();
       imgRasterControls.hidden = true;
       imgCropHint.hidden = true;
+      imgCropTools.hidden = true;
       imgFileName.parentElement.style.display = 'none';
       if (imgUrl.value.trim()) {
         imgPreview.src = imgUrl.value.trim();
         imgPreview.hidden = false;
-        imgCanvas.style.display = 'none';
         imgPreviewPane.hidden = false;
       }
     } else {
@@ -1980,104 +2280,94 @@ function sidebarHtml(): string {
       if (imgHasSource && !imgIsSvg) {
         imgRasterControls.hidden = false;
         imgCropHint.hidden = false;
+        imgCropTools.hidden = false;
       }
     }
   }
 
-  function imgFullCrop() {
-    if (!imgSourceImg) return null;
-    return { x: 0, y: 0, w: imgSourceImg.width, h: imgSourceImg.height };
-  }
-  function imgDrawFull() {
-    if (!imgSourceImg) return;
-    imgCanvas.style.display = 'block';
-    imgPreview.hidden = true;
-    imgCanvas.width = Math.round(imgSourceImg.width * imgDisplayScale);
-    imgCanvas.height = Math.round(imgSourceImg.height * imgDisplayScale);
-    imgCtx.clearRect(0, 0, imgCanvas.width, imgCanvas.height);
-    imgCtx.drawImage(imgSourceImg, 0, 0, imgCanvas.width, imgCanvas.height);
-    if (imgCrop && imgCrop.w > 0 && imgCrop.h > 0) {
-      imgCtx.save();
-      imgCtx.strokeStyle = '#3794ff';
-      imgCtx.lineWidth = 2;
-      imgCtx.setLineDash([6, 4]);
-      imgCtx.strokeRect(imgCrop.x * imgDisplayScale, imgCrop.y * imgDisplayScale, imgCrop.w * imgDisplayScale, imgCrop.h * imgDisplayScale);
-      imgCtx.restore();
-    }
-  }
-  function imgDrawCropPreview() {
-    if (!imgSourceImg || !imgCrop) return;
-    const maxW = parseInt(imgMaxWidth.value, 10);
-    const scale = Math.min(1, maxW / imgCrop.w);
-    const outW = Math.max(1, Math.round(imgCrop.w * scale));
-    const outH = Math.max(1, Math.round(imgCrop.h * scale));
-    const maxDisplay = 360;
-    const previewScale = Math.min(1, maxDisplay / outW, maxDisplay / outH);
-    imgCanvas.width = Math.round(outW * previewScale);
-    imgCanvas.height = Math.round(outH * previewScale);
-    imgCtx.clearRect(0, 0, imgCanvas.width, imgCanvas.height);
-    imgCtx.drawImage(imgSourceImg, imgCrop.x, imgCrop.y, imgCrop.w, imgCrop.h, 0, 0, imgCanvas.width, imgCanvas.height);
-  }
-  function imgCanvasToSource(evt) {
-    const rect = imgCanvas.getBoundingClientRect();
-    const sx = imgCanvas.width / rect.width;
-    const sy = imgCanvas.height / rect.height;
-    return { x: (evt.clientX - rect.left) * sx / imgDisplayScale, y: (evt.clientY - rect.top) * sy / imgDisplayScale };
-  }
-
-  imgCanvas.addEventListener('mousedown', function (evt) {
-    if (!imgSourceImg) return;
-    imgDragging = true;
-    imgDragStart = imgCanvasToSource(evt);
-    imgCrop = { x: imgDragStart.x, y: imgDragStart.y, w: 0, h: 0 };
-    imgDrawFull();
-  });
-  imgCanvas.addEventListener('mousemove', function (evt) {
-    if (!imgDragging || !imgSourceImg || !imgDragStart) return;
-    const pos = imgCanvasToSource(evt);
-    const x = Math.min(imgDragStart.x, pos.x);
-    const y = Math.min(imgDragStart.y, pos.y);
-    imgCrop = {
-      x: Math.max(0, Math.round(x)),
-      y: Math.max(0, Math.round(y)),
-      w: Math.min(imgSourceImg.width, Math.round(Math.abs(pos.x - imgDragStart.x))),
-      h: Math.min(imgSourceImg.height, Math.round(Math.abs(pos.y - imgDragStart.y))),
-    };
-    imgDrawFull();
-  });
-  window.addEventListener('mouseup', function () {
-    if (!imgDragging) return;
-    imgDragging = false;
-    if (imgCrop && (imgCrop.w < 4 || imgCrop.h < 4)) imgCrop = imgFullCrop();
-    else imgDirty = true;
-    imgDrawCropPreview();
+  imgCropTools.addEventListener('click', function (e) {
+    const btn = e.target && e.target.closest ? e.target.closest('.aspect-btn') : null;
+    if (!btn || !imgCropper) return;
+    const r = btn.getAttribute('data-ratio');
+    imgCropper.setAspectRatio(r === 'free' ? NaN : parseFloat(r));
+    imgSetActiveAspect(btn);
+    imgDirty = true;
+    imgRefreshAutoDims();
+    setTimeout(imgLiveApply, 0);
   });
 
+  // Produce the cropped + resized data URL via Cropper, honoring max width,
+  // format, and quality. SVGs are passed through untouched.
   function imgExport(cb) {
     if (imgIsSvg) return cb(imgSvgDataUrl);
-    if (!imgSourceImg || !imgCrop) return cb(null);
+    if (!imgCropper) return cb(null);
     const maxW = parseInt(imgMaxWidth.value, 10);
-    const scale = Math.min(1, maxW / imgCrop.w);
-    const outW = Math.max(1, Math.round(imgCrop.w * scale));
-    const outH = Math.max(1, Math.round(imgCrop.h * scale));
-    const off = document.createElement('canvas');
-    off.width = outW;
-    off.height = outH;
-    off.getContext('2d').drawImage(imgSourceImg, imgCrop.x, imgCrop.y, imgCrop.w, imgCrop.h, 0, 0, outW, outH);
+    const canvas = imgCropper.getCroppedCanvas({
+      maxWidth: maxW,
+      imageSmoothingEnabled: true,
+      imageSmoothingQuality: 'high',
+    });
+    if (!canvas) return cb(null);
     const mime = imgFormat.value;
     const q = parseInt(imgQuality.value, 10) / 100;
     try {
-      cb(mime === 'image/png' ? off.toDataURL('image/png') : off.toDataURL(mime, q));
+      cb(mime === 'image/png' ? canvas.toDataURL('image/png') : canvas.toDataURL(mime, q));
     } catch (err) {
       cb(null);
     }
+  }
+
+  function imgBuildPayload(cb) {
+    imgSetError('');
+    if (imgRemote.checked) {
+      const url = imgUrl.value.trim();
+      if (!url) { imgSetError('Enter an image URL.'); cb(null); return; }
+      cb(Object.assign({ mode: 'url', url: url, alt: imgAlt.value.trim(), fileName: '', subfolder: '' }, imgDimsPayload()));
+      return;
+    }
+    if (imgHasSource && imgDirty) {
+      imgSetBusy(true, 'Compressing…');
+      imgExport(function (dataUrl) {
+        imgSetBusy(false);
+        if (!dataUrl) { imgSetError('Could not process the image.'); cb(null); return; }
+        cb(Object.assign({
+          mode: 'file', dataUrl: dataUrl,
+          fileName: imgFileName.value.trim() || 'image',
+          subfolder: imgSubfolder.value.trim() || 'images',
+          alt: imgAlt.value.trim(), keepSrc: imgEditSrc, dirty: true,
+        }, imgDimsPayload(), imgCachePayload()));
+      });
+      return;
+    }
+    if (imgIsEdit && imgEditSrc) {
+      cb(Object.assign({
+        mode: 'file', keepSrc: imgEditSrc, dirty: false,
+        fileName: imgFileName.value.trim() || 'image',
+        subfolder: imgSubfolder.value.trim() || 'images',
+        alt: imgAlt.value.trim(),
+      }, imgDimsPayload(), imgCachePayload()));
+      return;
+    }
+    imgSetError('Add an image first — drop a file, browse, or paste a URL.');
+    cb(null);
+  }
+
+  function imgLiveApply() {
+    if (!imgIsEdit) return;
+    imgBuildPayload(function (payload) {
+      if (!payload) return;
+      imgSetBusy(true, 'Applying…');
+      vscode.postMessage({ type: 'imageLiveApply', payload: payload });
+    });
   }
 
   // Load a source image (drop / pick / fetched URL). keepMeta=true preserves
   // the file name + alt fields (used when re-loading an existing image to edit).
   function imgLoadSource(dataUrl, name, keepMeta) {
     imgSetError('');
+    imgDestroyCropper();
     imgHasSource = true;
+    imgSourceDataUrl = dataUrl;
     imgIsSvg = String(dataUrl).indexOf('image/svg') !== -1;
     if (!keepMeta) {
       imgFileName.value = imgSlug(name) || 'image';
@@ -2087,25 +2377,42 @@ function sidebarHtml(): string {
     imgPreviewPane.hidden = false;
     if (imgIsSvg) {
       imgSvgDataUrl = dataUrl;
-      imgCanvas.style.display = 'none';
       imgPreview.src = dataUrl;
       imgPreview.hidden = false;
       imgRasterControls.hidden = true;
       imgCropHint.hidden = true;
+      imgCropTools.hidden = true;
       return;
     }
-    const im = new Image();
-    im.onload = function () {
-      imgSourceImg = im;
-      imgCrop = imgFullCrop();
-      const maxDisplay = 360;
-      imgDisplayScale = Math.min(1, maxDisplay / im.width, maxDisplay / im.height);
-      imgRasterControls.hidden = imgRemote.checked;
-      imgCropHint.hidden = imgRemote.checked;
-      imgDrawFull();
+    if (imgRemote.checked) { imgApplyRemoteMode(); return; }
+    const freeBtn = imgCropTools.querySelector('.aspect-btn[data-ratio="free"]');
+    if (freeBtn) imgSetActiveAspect(freeBtn);
+    imgPreview.hidden = true;
+    imgCanvasWrap.classList.add('cropping');
+    imgCropTarget.style.display = 'block';
+    imgCropTarget.onload = function () {
+      imgCropTarget.onload = null;
+      imgCropper = new Cropper(imgCropTarget, {
+        viewMode: 1,
+        autoCropArea: 1,
+        background: false,
+        responsive: true,
+        checkOrientation: false,
+        ready: function () {
+          imgRasterControls.hidden = false;
+          imgCropHint.hidden = false;
+          imgCropTools.hidden = false;
+          if (imgPendingCrop) {
+            try { imgCropper.setData(imgPendingCrop); } catch (e) { /* ignore */ }
+            imgPendingCrop = null;
+          }
+          imgRefreshAutoDims();
+        },
+        cropend: function () { imgDirty = true; imgRefreshAutoDims(); imgLiveApply(); },
+      });
     };
-    im.onerror = function () { imgSetError('Failed to load image.'); };
-    im.src = dataUrl;
+    imgCropTarget.onerror = function () { imgSetError('Failed to load image.'); };
+    imgCropTarget.src = dataUrl;
   }
 
   function imgOpenInsert() {
@@ -2130,6 +2437,13 @@ function sidebarHtml(): string {
     imgTitle.textContent = 'Edit image';
     imgDesc.textContent = 'Update the alt text, re-crop, or replace this image.';
     imgAlt.value = data.alt || '';
+    // Prefill width/height from the existing tag. Keep auto-tracking enabled so
+    // crop/max-width changes update these fields until the user edits them.
+    if (data.width) imgWidth.value = String(data.width);
+    if (data.height) imgHeight.value = String(data.height);
+    if (data.width && data.height) {
+      imgLockedAspect = parseInt(data.width, 10) / parseInt(data.height, 10);
+    }
     // Derive file name + subfolder from the existing src.
     let s = imgEditSrc;
     const isRemote = /^https?:\\/\\//i.test(s);
@@ -2150,6 +2464,14 @@ function sidebarHtml(): string {
     imgSubfolder.value = parts.join('/') || 'images';
     imgFileName.parentElement.style.display = '';
     imgSubfolderLabel.style.display = '';
+    // Replay cached export settings so quality/crop can be tweaked from the
+    // pristine original rather than the already-compressed file on disk.
+    if (data.cache) {
+      if (data.cache.maxWidth) { imgMaxWidth.value = String(data.cache.maxWidth); imgMaxWidthVal.textContent = imgMaxWidth.value; }
+      if (data.cache.quality) { imgQuality.value = String(data.cache.quality); imgQualityVal.textContent = imgQuality.value + '%'; }
+      if (data.cache.format) imgFormat.value = data.cache.format;
+      if (data.cache.crop) imgPendingCrop = data.cache.crop;
+    }
     if (data.dataUrl) {
       imgLoadSource(data.dataUrl, fname, true);
       imgDirty = false;
@@ -2161,41 +2483,12 @@ function sidebarHtml(): string {
   }
 
   function imgDoSave() {
-    imgSetError('');
-    if (imgRemote.checked) {
-      const url = imgUrl.value.trim();
-      if (!url) { imgSetError('Enter an image URL.'); return; }
+    imgBuildPayload(function (payload) {
+      if (!payload) return;
       imgSave.disabled = true;
       imgSave.textContent = 'Saving…';
-      vscode.postMessage({ type: 'imageInsert', payload: { mode: 'url', url: url, alt: imgAlt.value.trim(), fileName: '', subfolder: '' } });
-      return;
-    }
-    if (imgHasSource && imgDirty) {
-      imgExport(function (dataUrl) {
-        if (!dataUrl) { imgSetError('Could not process the image.'); return; }
-        imgSave.disabled = true;
-        imgSave.textContent = 'Saving…';
-        vscode.postMessage({ type: 'imageInsert', payload: {
-          mode: 'file', dataUrl: dataUrl,
-          fileName: imgFileName.value.trim() || 'image',
-          subfolder: imgSubfolder.value.trim() || 'images',
-          alt: imgAlt.value.trim(), keepSrc: imgEditSrc, dirty: true,
-        } });
-      });
-      return;
-    }
-    if (imgIsEdit && imgEditSrc) {
-      imgSave.disabled = true;
-      imgSave.textContent = 'Saving…';
-      vscode.postMessage({ type: 'imageInsert', payload: {
-        mode: 'file', keepSrc: imgEditSrc, dirty: false,
-        fileName: imgFileName.value.trim() || 'image',
-        subfolder: imgSubfolder.value.trim() || 'images',
-        alt: imgAlt.value.trim(),
-      } });
-      return;
-    }
-    imgSetError('Add an image first — drop a file, browse, or paste a URL.');
+      vscode.postMessage({ type: 'imageInsert', payload: payload });
+    });
   }
 
   imgDrop.addEventListener('click', function () { vscode.postMessage({ type: 'imagePickFile' }); });
@@ -2218,11 +2511,45 @@ function sidebarHtml(): string {
     imgUrlLoad.textContent = '…';
     vscode.postMessage({ type: 'imageFetchUrl', url: url });
   });
-  imgRemote.addEventListener('change', imgApplyRemoteMode);
-  imgMaxWidth.addEventListener('input', function () { imgMaxWidthVal.textContent = imgMaxWidth.value; imgDirty = true; imgDrawCropPreview(); });
+  imgRemote.addEventListener('change', function () { imgApplyRemoteMode(); imgLiveApply(); });
+  imgMaxWidth.addEventListener('input', function () { imgMaxWidthVal.textContent = imgMaxWidth.value; imgDirty = true; imgRefreshAutoDims(); });
+  imgMaxWidth.addEventListener('change', imgLiveApply);
   imgQuality.addEventListener('input', function () { imgQualityVal.textContent = imgQuality.value + '%'; imgDirty = true; });
-  imgFormat.addEventListener('change', function () { imgDirty = true; });
-  imgResetCrop.addEventListener('click', function () { imgCrop = imgFullCrop(); imgDirty = true; imgDrawFull(); });
+  imgQuality.addEventListener('change', imgLiveApply);
+  imgFormat.addEventListener('change', function () { imgDirty = true; imgLiveApply(); });
+  imgResetCrop.addEventListener('click', function () {
+    if (imgCropper) imgCropper.reset();
+    const freeBtn = imgCropTools.querySelector('.aspect-btn[data-ratio="free"]');
+    if (freeBtn) { imgCropper && imgCropper.setAspectRatio(NaN); imgSetActiveAspect(freeBtn); }
+    imgDirty = true;
+    imgDimsAuto = true;
+    imgRefreshAutoDims();
+    imgLiveApply();
+  });
+
+  imgWidth.addEventListener('input', function () {
+    imgDimsAuto = false;
+    if (imgLinkDims.checked && imgLockedAspect > 0) {
+      const w = parseInt(imgWidth.value, 10);
+      if (w > 0) imgHeight.value = String(Math.max(1, Math.round(w / imgLockedAspect)));
+    }
+  });
+  imgHeight.addEventListener('input', function () {
+    imgDimsAuto = false;
+    if (imgLinkDims.checked && imgLockedAspect > 0) {
+      const h = parseInt(imgHeight.value, 10);
+      if (h > 0) imgWidth.value = String(Math.max(1, Math.round(h * imgLockedAspect)));
+    }
+  });
+  imgWidth.addEventListener('change', imgLiveApply);
+  imgHeight.addEventListener('change', imgLiveApply);
+  imgAlt.addEventListener('change', imgLiveApply);
+  imgLinkDims.addEventListener('change', function () {
+    const w = parseInt(imgWidth.value, 10);
+    const h = parseInt(imgHeight.value, 10);
+    if (imgLinkDims.checked && w > 0 && h > 0) imgLockedAspect = w / h;
+    imgLiveApply();
+  });
   imgCancel.addEventListener('click', function () { vscode.postMessage({ type: 'imageCancel' }); imgClose(); });
   imgSave.addEventListener('click', imgDoSave);
 
@@ -2241,8 +2568,13 @@ function sidebarHtml(): string {
     if (msg.type === 'imageError') {
       imgUrlLoad.disabled = false;
       imgUrlLoad.textContent = 'Load';
+      imgSetBusy(false);
       imgResetSaveBtn();
       imgSetError(msg.message || 'Something went wrong.');
+    }
+    if (msg.type === 'imageApplied') {
+      imgSetBusy(false);
+      if (msg.src) imgEditSrc = msg.src;
     }
     if (msg.type === 'imageDone') imgClose();
   });
