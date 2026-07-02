@@ -18,19 +18,44 @@ const MIN_NODE_MAJOR = 20;
 /** Sharp's official install/troubleshooting docs. */
 const SHARP_HELP_URL = "https://sharp.pixelplumbing.com/install";
 
+export type ToolchainAction =
+  | "repairSharp"
+  | "copyExecutionPolicyCommands"
+  | "openSharpHelp"
+  | "showDiagnostics"
+  | "retryPreview";
+
+export interface ToolchainErrorAction {
+  id: ToolchainAction;
+  label: string;
+}
+
 /**
  * A preview failure caused by a missing/incompatible toolchain (Node.js or a
- * package manager). Carries a link the error view can surface so the user can
- * fix it without leaving the editor.
+ * package manager). Carries repair actions the error view can surface so the
+ * user can fix it without leaving the editor.
  */
 export class ToolchainError extends Error {
+  readonly helpUrl?: string;
+  readonly helpLabel?: string;
+  readonly actions: ToolchainErrorAction[];
+
   constructor(
     message: string,
-    readonly helpUrl: string,
-    readonly helpLabel: string,
+    options: {
+      helpUrl?: string;
+      helpLabel?: string;
+      actions?: ToolchainErrorAction[];
+    } = {},
   ) {
     super(message);
     this.name = "ToolchainError";
+    this.helpUrl = options.helpUrl;
+    this.helpLabel = options.helpLabel;
+    this.actions = options.actions ?? [
+      { id: "showDiagnostics", label: "Details" },
+      { id: "retryPreview", label: "Try again" },
+    ];
   }
 }
 
@@ -51,6 +76,7 @@ export class DevServerManager {
   private readonly output: vscode.OutputChannel;
   private readonly statePath: string;
   private readonly pidPath: string;
+  private readonly nodeModulesPath: string;
   /** Active content root, persisted to the state file for the renderer. */
   private currentRoot: string | undefined;
   /** Live-edit overrides (abs path -> unsaved buffer content). */
@@ -67,11 +93,119 @@ export class DevServerManager {
     this.output = output;
     this.statePath = path.join(this.webappDir, ".preview-state.json");
     this.pidPath = path.join(this.webappDir, ".preview-server.pid");
+    this.nodeModulesPath = path.join(this.webappDir, "node_modules");
   }
 
   /** The recent server/install output, for display in a debugging dropdown. */
   getRecentLogs(): string {
     return this.logBuffer.trimStart();
+  }
+
+  /** Copy-pasteable PowerShell commands for users whose terminal blocks npm.ps1. */
+  windowsExecutionPolicyCommands(): string {
+    return [
+      "Get-ExecutionPolicy -List",
+      "Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned",
+      "Get-ExecutionPolicy -List",
+      "",
+      "# Temporary fix for this PowerShell window only:",
+      "Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass",
+    ].join("\n");
+  }
+
+  /** Non-mutating diagnostics for support and the preview's Details button. */
+  async getToolchainDiagnostics(): Promise<string> {
+    const env = await this.toolchainEnv();
+    const lines: string[] = [
+      "Fumadocs Preview toolchain diagnostics",
+      `Platform: ${process.platform} ${process.arch}`,
+      `Preview app: ${this.webappDir}`,
+      "",
+    ];
+
+    await appendCommand(lines, "node -v", "node", ["-v"], env, this.webappDir);
+    await appendCommand(lines, "npm -v", "npm", ["-v"], env, this.webappDir);
+    await appendCommand(
+      lines,
+      "npm config get ignore-scripts",
+      "npm",
+      ["config", "get", "ignore-scripts"],
+      env,
+      this.webappDir,
+    );
+    await appendCommand(
+      lines,
+      "npm config get optional",
+      "npm",
+      ["config", "get", "optional"],
+      env,
+      this.webappDir,
+    );
+    await appendCommand(
+      lines,
+      "npm config get strict-allow-scripts",
+      "npm",
+      ["config", "get", "strict-allow-scripts"],
+      env,
+      this.webappDir,
+    );
+    await appendCommand(
+      lines,
+      "npm approve-scripts --help",
+      "npm",
+      ["approve-scripts", "--help"],
+      env,
+      this.webappDir,
+    );
+
+    if (process.platform === "win32") {
+      await appendCommand(
+        lines,
+        "PowerShell execution policy",
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          "Get-ExecutionPolicy -List | Out-String",
+        ],
+        env,
+        this.webappDir,
+      );
+      lines.push(
+        "",
+        `Expected Sharp package: ${expectedSharpPackageName() ?? "unknown"}`,
+        `Expected Sharp package installed: ${expectedSharpPackageInstalled(this.webappDir)}`,
+      );
+    }
+
+    const sharp = await probeSharp(this.webappDir, env);
+    lines.push(
+      "",
+      `Sharp probe: ${sharp.ok ? "ok" : "failed"}`,
+      sharp.error ? sharp.error : "",
+    );
+
+    return lines.join("\n").trim();
+  }
+
+  /**
+   * Repair only the bundled preview app dependencies. This intentionally does
+   * not alter the user's global PowerShell execution policy or npm config.
+   */
+  async repairSharp(onProgress?: ProgressFn): Promise<void> {
+    const env = await this.toolchainEnv();
+    this.stop();
+    this.installPromise = undefined;
+    onProgress?.("Removing broken preview dependencies…");
+    this.recordLine("[repair] removing bundled preview node_modules");
+    await fs.promises.rm(this.nodeModulesPath, { recursive: true, force: true });
+    onProgress?.("Installing preview dependencies with Sharp enabled…");
+    await this.installDependencies(env);
+    onProgress?.("Checking image support (sharp)…");
+    await this.ensureSharp(onProgress, env);
+    this.recordLine("[repair] sharp repair completed");
   }
 
   /** Append to the output channel and keep a capped copy for the error view. */
@@ -121,23 +255,36 @@ export class DevServerManager {
     this.killStaleServer();
 
     const port = await this.resolvePort(onProgress);
-    const bin = this.nextBinary();
+    const launch = this.nextLaunchCommand();
     onProgress?.(`Starting the Fumadocs dev server on port ${port}…`);
     this.recordLine(`[server] starting on :${port}`);
 
-    const proc = cp.spawn(bin, ["dev", "-p", String(port), "-H", "127.0.0.1"], {
-      cwd: this.webappDir,
-      env: {
-        ...env,
-        BROWSER: "none",
-        NEXT_TELEMETRY_DISABLED: "1",
+    const proc = cp.spawn(
+      launch.command,
+      [...launch.args, "dev", "-p", String(port), "-H", "127.0.0.1"],
+      {
+        cwd: this.webappDir,
+        env: {
+          ...env,
+          BROWSER: "none",
+          NEXT_TELEMETRY_DISABLED: "1",
+        },
+        windowsHide: true,
       },
-    });
+    );
     this.proc = proc;
     this.writePid(proc.pid);
 
     proc.stdout?.on("data", (d) => this.record(`[next] ${d}`));
     proc.stderr?.on("data", (d) => this.record(`[next] ${d}`));
+    proc.on("error", (err) => {
+      this.recordLine(`[server] failed to start: ${String(err)}`);
+      if (this.proc === proc) {
+        this.proc = undefined;
+        this.baseUrl = undefined;
+        this.starting = undefined;
+      }
+    });
     proc.on("exit", (code) => {
       this.recordLine(`[server] exited (code ${code})`);
       if (this.proc === proc) {
@@ -178,8 +325,10 @@ export class DevServerManager {
       this.recordLine("[toolchain] npm was not found on PATH");
       throw new ToolchainError(
         "Node.js is required to run the Fumadocs preview, but npm wasn't found on your PATH. Install Node.js (it includes npm), then restart the preview.",
-        NODE_DOWNLOAD_URL,
-        "Install Node.js",
+        {
+          helpUrl: NODE_DOWNLOAD_URL,
+          helpLabel: "Install Node.js",
+        },
       );
     }
 
@@ -189,8 +338,10 @@ export class DevServerManager {
       this.recordLine("[toolchain] npm works but node was not found on PATH");
       throw new ToolchainError(
         "npm is available, but the Node.js runtime wasn't found on your PATH. Reinstall Node.js, then restart the preview.",
-        NODE_DOWNLOAD_URL,
-        "Install Node.js",
+        {
+          helpUrl: NODE_DOWNLOAD_URL,
+          helpLabel: "Install Node.js",
+        },
       );
     }
 
@@ -199,15 +350,29 @@ export class DevServerManager {
     if (major !== null && major < MIN_NODE_MAJOR) {
       throw new ToolchainError(
         `The Fumadocs preview needs Node.js ${MIN_NODE_MAJOR} or newer, but found ${version}. Update Node.js, then restart the preview.`,
-        NODE_DOWNLOAD_URL,
-        "Update Node.js",
+        {
+          helpUrl: NODE_DOWNLOAD_URL,
+          helpLabel: "Update Node.js",
+        },
       );
     }
   }
 
-  private nextBinary(): string {
-    const binName = process.platform === "win32" ? "next.cmd" : "next";
-    return path.join(this.webappDir, "node_modules", ".bin", binName);
+  private nextLaunchCommand(): { command: string; args: string[] } {
+    const nextCli = path.join(
+      this.webappDir,
+      "node_modules",
+      "next",
+      "dist",
+      "bin",
+      "next",
+    );
+    if (process.platform === "win32") {
+      // Avoid spawning next.cmd on Windows. Node 18.20.2+/20.12.2+ rejects
+      // direct .cmd/.bat spawn without a shell with EINVAL.
+      return { command: "node", args: [nextCli] };
+    }
+    return { command: nextCli, args: [] };
   }
 
   /** The user's preferred preview port (defaults to 6969). */
@@ -411,8 +576,10 @@ export class DevServerManager {
     this.recordLine(`[toolchain] "${command}" was not found on PATH`);
     throw new ToolchainError(
       `Node.js is installed, but "${command}" — needed to install the preview's dependencies — wasn't found on your PATH.`,
-      NODE_PM_HELP_URL,
-      `How to set up ${command}`,
+      {
+        helpUrl: NODE_PM_HELP_URL,
+        helpLabel: `How to set up ${command}`,
+      },
     );
   }
 
@@ -436,8 +603,23 @@ export class DevServerManager {
     this.recordLine(`[toolchain] sharp failed to load:\n${result.error}`);
     throw new ToolchainError(
       sharpInstructions(this.webappDir),
-      SHARP_HELP_URL,
-      "Sharp install help",
+      {
+        helpUrl: SHARP_HELP_URL,
+        helpLabel: "Sharp install help",
+        actions: [
+          { id: "repairSharp", label: "Fix image support" },
+          ...(process.platform === "win32"
+            ? [
+                {
+                  id: "copyExecutionPolicyCommands" as const,
+                  label: "Copy Windows script fix",
+                },
+              ]
+            : []),
+          { id: "showDiagnostics", label: "Details" },
+          { id: "retryPreview", label: "Try again" },
+        ],
+      },
     );
   }
 
@@ -484,7 +666,10 @@ export class DevServerManager {
     // has `ignore-scripts=true` in their global ~/.npmrc (common on locked-down
     // Windows setups), that script is skipped and the preview fails to render
     // images. Force scripts on for this install so sharp's binary is fetched.
-    return { command: "npm", args: ["ci", "--ignore-scripts=false"] };
+    return {
+      command: "npm",
+      args: ["ci", "--ignore-scripts=false", "--include=optional"],
+    };
   }
 
   dispose(): void {
@@ -507,20 +692,31 @@ export class DevServerManager {
 /** Resolve once the server answers an HTTP request (any status), or reject. */
 function waitForServer(port: number, proc: cp.ChildProcess): Promise<void> {
   return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const finish = (err?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (err) reject(err);
+      else resolve();
+    };
     const timeout = setTimeout(() => {
-      reject(new Error("Timed out waiting for the preview server to start."));
+      finish(new Error("Timed out waiting for the preview server to start."));
     }, 90_000);
 
+    proc.once("error", (err) => {
+      finish(classifySpawnError(err));
+    });
+
     const poll = async () => {
+      if (settled) return;
       if (proc.exitCode !== null || proc.killed) {
-        clearTimeout(timeout);
-        reject(new Error("Preview server exited before it became ready."));
+        finish(new Error("Preview server exited before it became ready."));
         return;
       }
       try {
         await fetch(`http://127.0.0.1:${port}/`, { method: "HEAD" });
-        clearTimeout(timeout);
-        resolve();
+        finish();
         return;
       } catch {
         setTimeout(poll, 400);
@@ -528,6 +724,22 @@ function waitForServer(port: number, proc: cp.ChildProcess): Promise<void> {
     };
     setTimeout(poll, 600);
   });
+}
+
+function classifySpawnError(err: Error): Error {
+  const code = (err as NodeJS.ErrnoException).code;
+  if (process.platform === "win32" && code === "EINVAL") {
+    return new ToolchainError(
+      "Windows blocked the preview server process launch with spawn EINVAL. The extension now avoids .cmd launchers, so try again; if it still fails, open Details and share the diagnostics.",
+      {
+        actions: [
+          { id: "showDiagnostics", label: "Details" },
+          { id: "retryPreview", label: "Try again" },
+        ],
+      },
+    );
+  }
+  return err;
 }
 
 function findFreePort(): Promise<number> {
@@ -632,17 +844,25 @@ function runCommand(
   command: string,
   args: string[],
   env: NodeJS.ProcessEnv,
-): Promise<{ code: number | null; stdout: string }> {
+  cwd?: string,
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     let out = "";
+    let err = "";
     const proc = cp.spawn(command, args, {
+      cwd,
       env,
       shell: process.platform === "win32",
       windowsHide: true,
     });
-    proc.on("error", () => resolve({ code: null, stdout: "" }));
+    proc.on("error", (e) =>
+      resolve({ code: null, stdout: "", stderr: String(e) }),
+    );
     proc.stdout?.on("data", (d) => (out += String(d)));
-    proc.on("exit", (code) => resolve({ code, stdout: out.trim() }));
+    proc.stderr?.on("data", (d) => (err += String(d)));
+    proc.on("exit", (code) =>
+      resolve({ code, stdout: out.trim(), stderr: err.trim() }),
+    );
   });
 }
 
@@ -652,6 +872,36 @@ function commandExists(
   env: NodeJS.ProcessEnv,
 ): Promise<boolean> {
   return runCommand(command, ["--version"], env).then((r) => r.code === 0);
+}
+
+async function appendCommand(
+  lines: string[],
+  label: string,
+  command: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  cwd: string,
+): Promise<void> {
+  const result = await runCommand(command, args, env, cwd);
+  lines.push(`$ ${label}`, `exit: ${result.code ?? "error"}`);
+  if (result.stdout) lines.push(result.stdout);
+  if (result.stderr) lines.push(result.stderr);
+  lines.push("");
+}
+
+function expectedSharpPackageName(): string | undefined {
+  if (process.platform !== "win32") return undefined;
+  if (process.arch === "x64") return "@img/sharp-win32-x64";
+  if (process.arch === "arm64") return "@img/sharp-win32-arm64";
+  if (process.arch === "ia32") return "@img/sharp-win32-ia32";
+  return undefined;
+}
+
+function expectedSharpPackageInstalled(webappDir: string): boolean {
+  const name = expectedSharpPackageName();
+  if (!name) return false;
+  const [scope, pkg] = name.split("/");
+  return fs.existsSync(path.join(webappDir, "node_modules", scope, pkg));
 }
 
 /**
@@ -697,10 +947,7 @@ function sharpInstructions(webappDir: string): string {
       "",
       "Reinstall it with scripts and the platform binary enabled:",
       cd,
-      "  npm install --ignore-scripts=false --include=optional sharp",
-      "",
-      "If you use @lavamoat/allow-scripts, also run:",
-      "  npm config set allow-scripts=sharp --location=user",
+      "  npm ci --ignore-scripts=false --include=optional",
       "",
       "Then restart the preview.",
     ].join("\n");

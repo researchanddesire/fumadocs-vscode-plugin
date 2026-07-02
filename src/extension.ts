@@ -7,7 +7,7 @@ import { MarkdownBlockEditCodeLensProvider } from "./markdownBlockEdit";
 import { ImageEditCodeLensProvider } from "./imageEdit";
 import { registerEditorActions } from "./editorActions";
 import { registerDocsToolsView } from "./docsTools/docsToolsView";
-import { DevServerManager, ToolchainError } from "./devServer";
+import { DevServerManager, ToolchainAction, ToolchainError } from "./devServer";
 import { PreviewPanel } from "./preview";
 import { computeSlugPath, findContentRoot, findNamedContentRoot } from "./contentRoot";
 import { isMarkdown } from "./markdown";
@@ -131,11 +131,23 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("fumadocs.refreshPreview", () =>
       restartPreview(),
     ),
+    vscode.commands.registerCommand("fumadocs.repairToolchain", () =>
+      repairToolchain(),
+    ),
+    vscode.commands.registerCommand("fumadocs.copyWindowsScriptFix", () =>
+      copyWindowsScriptFix(),
+    ),
+    vscode.commands.registerCommand("fumadocs.showToolchainDiagnostics", () =>
+      showToolchainDiagnostics(),
+    ),
     vscode.window.registerWebviewPanelSerializer("fumadocs.preview", {
       deserializeWebviewPanel(panel) {
         const restored = PreviewPanel.restore(panel);
         restored.setRestartHandler(() => void restartPreview());
         restored.setStartHandler(() => void openPreview());
+        restored.setToolchainActionHandler((action) =>
+          void handleToolchainAction(action),
+        );
         return Promise.resolve();
       },
     }),
@@ -454,10 +466,75 @@ async function restartPreview(): Promise<void> {
   await updatePreviewFor(target);
 }
 
+async function repairToolchain(): Promise<void> {
+  try {
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: "Fumadocs Preview: fixing image support…",
+        cancellable: false,
+      },
+      (_progress) =>
+        manager.repairSharp((phase) => {
+          _progress.report({ message: phase });
+        }),
+    );
+    void vscode.window.showInformationMessage(
+      "Fumadocs Preview image support was repaired.",
+    );
+    await restartPreview();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    output.appendLine(`[repair] ${message}`);
+    void vscode.window.showErrorMessage(
+      `Fumadocs Preview repair failed: ${message}`,
+    );
+  }
+}
+
+async function copyWindowsScriptFix(): Promise<void> {
+  await vscode.env.clipboard.writeText(manager.windowsExecutionPolicyCommands());
+  void vscode.window.showInformationMessage(
+    "Copied the Windows PowerShell script fix commands.",
+  );
+}
+
+async function showToolchainDiagnostics(): Promise<void> {
+  const diagnostics = await manager.getToolchainDiagnostics();
+  output.appendLine("");
+  output.appendLine("========== Toolchain diagnostics ==========");
+  output.appendLine(diagnostics);
+  output.appendLine("==========================================");
+  output.show(true);
+}
+
+async function handleToolchainAction(action: string): Promise<void> {
+  switch (action as ToolchainAction) {
+    case "repairSharp":
+      await repairToolchain();
+      break;
+    case "copyExecutionPolicyCommands":
+      await copyWindowsScriptFix();
+      break;
+    case "showDiagnostics":
+      await showToolchainDiagnostics();
+      break;
+    case "retryPreview":
+      await restartPreview();
+      break;
+    case "openSharpHelp":
+      void vscode.env.openExternal(vscode.Uri.parse("https://sharp.pixelplumbing.com/install"));
+      break;
+    default:
+      output.appendLine(`[toolchain] unknown action: ${action}`);
+  }
+}
+
 async function updatePreviewFor(filePath: string): Promise<void> {
   const panel = PreviewPanel.createOrShow();
   panel.setRestartHandler(() => void restartPreview());
   panel.setStartHandler(() => void openPreview());
+  panel.setToolchainActionHandler((action) => void handleToolchainAction(action));
   const contentDirNames = vscode.workspace
     .getConfiguration("fumadocs")
     .get<string[]>("contentDirNames", ["content"]);
@@ -489,10 +566,11 @@ async function updatePreviewFor(filePath: string): Promise<void> {
     const message = err instanceof Error ? err.message : String(err);
     output.appendLine(`[error] ${message}`);
     const help =
-      err instanceof ToolchainError
+      err instanceof ToolchainError && err.helpUrl && err.helpLabel
         ? { url: err.helpUrl, label: err.helpLabel }
         : undefined;
-    panel.showError(route, message, manager.getRecentLogs(), help);
+    const actions = err instanceof ToolchainError ? err.actions : undefined;
+    panel.showError(route, message, manager.getRecentLogs(), help, actions);
     void vscode.window.showErrorMessage(`Fumadocs Preview: ${message}`);
   }
 }

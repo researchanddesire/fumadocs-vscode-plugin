@@ -1,5 +1,10 @@
 import * as vscode from "vscode";
 
+export interface PreviewErrorAction {
+  id: string;
+  label: string;
+}
+
 /**
  * A single reusable side-by-side webview that embeds the running Fumadocs
  * preview server in an iframe.
@@ -11,6 +16,7 @@ export class PreviewPanel {
   private onDisposeCb: (() => void) | undefined;
   private onRestartCb: (() => void) | undefined;
   private onStartCb: (() => void) | undefined;
+  private onToolchainActionCb: ((action: string) => void) | undefined;
   private currentUrl = "";
 
   static get currentUrl(): string | undefined {
@@ -66,7 +72,7 @@ export class PreviewPanel {
     this.panel = panel;
     this.panel.webview.html = this.shellHtml(initial);
     this.panel.webview.onDidReceiveMessage(
-      (msg: { type?: string; url?: string }) => {
+      (msg: { type?: string; url?: string; action?: string }) => {
         if (msg.type === "openExternal") {
           const url = PreviewPanel.currentUrl;
           if (url) void vscode.env.openExternal(vscode.Uri.parse(url));
@@ -76,6 +82,8 @@ export class PreviewPanel {
           this.onRestartCb?.();
         } else if (msg.type === "startPreview") {
           this.onStartCb?.();
+        } else if (msg.type === "toolchainAction" && msg.action) {
+          this.onToolchainActionCb?.(msg.action);
         }
       },
       undefined,
@@ -96,6 +104,11 @@ export class PreviewPanel {
   /** Register the handler invoked when the user clicks "Start preview". */
   setStartHandler(cb: () => void): void {
     this.onStartCb = cb;
+  }
+
+  /** Register the handler invoked by toolchain repair buttons. */
+  setToolchainActionHandler(cb: (action: string) => void): void {
+    this.onToolchainActionCb = cb;
   }
 
   /** Show the idle intro with a "Start preview" call to action. */
@@ -145,6 +158,7 @@ export class PreviewPanel {
     message: string,
     logs: string,
     help?: { url: string; label: string },
+    actions?: PreviewErrorAction[],
   ): void {
     void this.panel.webview.postMessage({
       type: "error",
@@ -152,6 +166,7 @@ export class PreviewPanel {
       message,
       logs,
       help,
+      actions,
     });
   }
 
@@ -264,7 +279,7 @@ export class PreviewPanel {
     white-space: pre-wrap; word-break: break-word;
   }
   #error .error-actions {
-    display: flex; justify-content: center; gap: 8px; margin-bottom: 16px;
+    display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; margin-bottom: 16px;
   }
   #error details {
     width: 100%; max-width: 720px; text-align: left;
@@ -332,9 +347,18 @@ export class PreviewPanel {
     <div class="route" id="error-route">&nbsp;</div>
     <div class="message" id="error-message"></div>
     <div class="error-actions">
+      <button class="toolbar-btn" id="repair-sharp" type="button" data-action="repairSharp" style="display:none">
+        Fix image support
+      </button>
+      <button class="toolbar-btn" id="copy-policy" type="button" data-action="copyExecutionPolicyCommands" style="display:none">
+        Copy Windows script fix
+      </button>
       <button class="toolbar-btn" id="error-help" type="button" style="display:none"></button>
+      <button class="toolbar-btn" id="error-details" type="button" data-action="showDiagnostics" style="display:none">
+        Details
+      </button>
       <button class="toolbar-btn" id="restart-preview" type="button" title="Stop and restart the Fumadocs preview server">
-        ↻ Restart preview
+        Try again
       </button>
     </div>
     <details>
@@ -409,10 +433,30 @@ export class PreviewPanel {
       progress.classList.add('visible');
     }
 
-    function showError(route, message, logs, help) {
+    const actionButtons = {
+      repairSharp: document.getElementById('repair-sharp'),
+      copyExecutionPolicyCommands: document.getElementById('copy-policy'),
+      showDiagnostics: document.getElementById('error-details'),
+      retryPreview: document.getElementById('restart-preview'),
+    };
+
+    function showError(route, message, logs, help, actions) {
       const restartBtn = document.getElementById('restart-preview');
       if (restartBtn) restartBtn.disabled = false;
       const helpBtn = document.getElementById('error-help');
+      Object.values(actionButtons).forEach((btn) => {
+        if (!btn) return;
+        btn.style.display = 'none';
+      });
+      const visibleActions = Array.isArray(actions) && actions.length
+        ? actions
+        : [{ id: 'retryPreview', label: 'Try again' }];
+      visibleActions.forEach((action) => {
+        const btn = actionButtons[action.id];
+        if (!btn) return;
+        btn.textContent = action.label || btn.textContent;
+        btn.style.display = '';
+      });
       if (help && help.url) {
         helpBtn.textContent = (help.label || 'Learn more') + ' ↗';
         helpBtn.dataset.url = help.url;
@@ -445,7 +489,7 @@ export class PreviewPanel {
     const restartBtn = document.getElementById('restart-preview');
     restartBtn.addEventListener('click', () => {
       restartBtn.disabled = true;
-      vscodeApi.postMessage({ type: 'restartPreview' });
+      vscodeApi.postMessage({ type: 'toolchainAction', action: 'retryPreview' });
     });
 
     const refreshBtn = document.getElementById('refresh-preview');
@@ -462,6 +506,14 @@ export class PreviewPanel {
     helpBtn.addEventListener('click', () => {
       const url = helpBtn.dataset.url;
       if (url) vscodeApi.postMessage({ type: 'openUrl', url });
+    });
+
+    Object.values(actionButtons).forEach((btn) => {
+      if (!btn || btn.id === 'restart-preview') return;
+      btn.addEventListener('click', () => {
+        const action = btn.dataset.action;
+        if (action) vscodeApi.postMessage({ type: 'toolchainAction', action });
+      });
     });
 
     window.addEventListener('message', (event) => {
@@ -498,7 +550,7 @@ export class PreviewPanel {
       } else if (msg.type === 'progress') {
         showProgress(msg.route, msg.phase);
       } else if (msg.type === 'error') {
-        showError(msg.route, msg.message, msg.logs, msg.help);
+        showError(msg.route, msg.message, msg.logs, msg.help, msg.actions);
       } else if (msg.type === 'scrollToLine') {
         pendingScrollLine = msg.line;
         forwardScroll();

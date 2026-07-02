@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "description": "Runtime Fumadocs renderer used by the Fumadocs Preview VSCode extension.",
+  "allowScripts": {
+    "sharp@0.34.5": true
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",

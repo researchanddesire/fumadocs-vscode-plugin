@@ -2,7 +2,7 @@
   "name": "fumadocs-vscode-plugin",
   "displayName": "Fumadocs Preview",
   "description": "Live-preview any MDX/Markdown file or folder with a real Fumadocs site, rendered side-by-side inside VSCode.",
-  "version": "1.2.7",
+  "version": "1.2.8",
   "publisher": "researchanddesire",
   "license": "MIT",
   "repository": {
@@ -52,6 +52,21 @@
         "shortTitle": "Refresh",
         "category": "Fumadocs",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "fumadocs.repairToolchain",
+        "title": "Repair Preview Toolchain",
+        "category": "Fumadocs"
+      },
+      {
+        "command": "fumadocs.copyWindowsScriptFix",
+        "title": "Copy Windows Script Fix",
+        "category": "Fumadocs"
+      },
+      {
+        "command": "fumadocs.showToolchainDiagnostics",
+        "title": "Show Preview Toolchain Diagnostics",
+        "category": "Fumadocs"
       },
       {
         "command": "fumadocs.docsTools.addImage",
@@ -365,6 +380,18 @@
         {
           "command": "fumadocs.editImage",
           "when": "false"
+        },
+        {
+          "command": "fumadocs.repairToolchain",
+          "when": "false"
+        },
+        {
+          "command": "fumadocs.copyWindowsScriptFix",
+          "when": "false"
+        },
+        {
+          "command": "fumadocs.showToolchainDiagnostics",
+          "when": "false"
         }
       ],
       "webview/title": [
@@ -421,6 +448,8 @@
     "build": "node esbuild.js --production",
     "watch": "node esbuild.js --watch",
     "typecheck": "tsc --noEmit",
+    "test": "node scripts/windows-toolchain-smoke-test.js",
+    "test:windows-toolchain": "node scripts/windows-toolchain-smoke-test.js",
     "package": "vsce package --no-dependencies"
   },
   "devDependencies": {
