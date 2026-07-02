@@ -2,7 +2,10 @@ import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
 import { PreviewCodeLensProvider } from "./codelens";
-import { ComponentEditCodeLensProvider } from "./componentEdit";
+import {
+  ComponentEditCodeLensProvider,
+  removeComponentBlock,
+} from "./componentEdit";
 import { MarkdownBlockEditCodeLensProvider } from "./markdownBlockEdit";
 import { ImageEditCodeLensProvider } from "./imageEdit";
 import { registerEditorActions } from "./editorActions";
@@ -109,6 +112,10 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(
       "fumadocs.meta.removeRefs",
       (folderDir: string, refs: string[]) => removeRefs(folderDir, refs),
+    ),
+    vscode.commands.registerCommand(
+      "fumadocs.removeComponent",
+      (uri: vscode.Uri, range: vscode.Range) => removeComponentBlock(uri, range),
     ),
     vscode.workspace.onDidChangeTextDocument((event) => {
       const doc = event.document;

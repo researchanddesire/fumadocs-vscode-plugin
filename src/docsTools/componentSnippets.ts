@@ -8,6 +8,9 @@ export interface ComponentCatalogItem {
   snippet?: string;
 }
 
+export const FUMADOCS_COMPONENT_MIME =
+  "application/vnd.code.fumadocs.component";
+
 /**
  * The Fumadocs default components surfaced in the sidebar. Configurable ones
  * open the in-sidebar builder overlay (see `docsToolsView.ts`); the rest

@@ -1,7 +1,11 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
-import { FUMADOCS_COMPONENTS, getComponent } from "./componentSnippets";
+import {
+  FUMADOCS_COMPONENT_MIME,
+  FUMADOCS_COMPONENTS,
+  getComponent,
+} from "./componentSnippets";
 import {
   absImagePath,
   buildImageMarkup,
@@ -17,9 +21,11 @@ import {
   storeOriginal,
 } from "./imageCache";
 import { insertBlockBelowCursor } from "./insertAtCursor";
+import { prepareMdxBlock } from "./insertPlan";
 import { isMarkdownEditor } from "../markdown";
 import { getDocsToolsContext } from "./state";
 import { findImages } from "../imageEdit";
+import { ComponentDropProvider } from "./componentDrop";
 
 /** The component block currently being built/edited live in the document. */
 interface ComponentSession {
@@ -455,7 +461,9 @@ export class DocsToolsViewProvider implements vscode.WebviewViewProvider {
     if (!session) return;
 
     if (session.mode === "edit" && session.originalText != null) {
-      await replaceRange(session.uri, session.range, session.originalText);
+      await replaceRange(session.uri, session.range, session.originalText, {
+        prepare: false,
+      });
     } else if (session.mode === "insert") {
       await removeBlock(session.uri, session.range);
     }
@@ -476,6 +484,7 @@ export class DocsToolsViewProvider implements vscode.WebviewViewProvider {
         label: c.label,
         description: c.description,
         configurable: c.configurable,
+        snippet: c.snippet,
       })),
     });
   }
@@ -502,13 +511,15 @@ async function replaceRange(
   uri: vscode.Uri,
   range: vscode.Range,
   text: string,
+  options: { prepare?: boolean } = {},
 ): Promise<vscode.Range | null> {
+  const nextText = options.prepare === false ? text : prepareMdxBlock(text);
   const edit = new vscode.WorkspaceEdit();
-  edit.replace(uri, range, text);
+  edit.replace(uri, range, nextText);
   const ok = await vscode.workspace.applyEdit(edit);
   if (!ok) return null;
 
-  const lines = text.split("\n");
+  const lines = nextText.split("\n");
   const endLine = range.start.line + lines.length - 1;
   const endChar =
     lines.length === 1
@@ -623,6 +634,14 @@ export function registerDocsToolsView(
     ),
     vscode.commands.registerCommand("fumadocs.docsTools.addImage", () =>
       provider.openImageBuilder(),
+    ),
+    vscode.languages.registerDocumentDropEditProvider(
+      [{ scheme: "file", pattern: "**/*.{md,mdx}" }],
+      new ComponentDropProvider(),
+      {
+        dropMimeTypes: [FUMADOCS_COMPONENT_MIME],
+        providedDropEditKinds: [vscode.DocumentDropOrPasteEditKind.Text],
+      },
     ),
     vscode.commands.registerCommand(
       "fumadocs.editImage",
@@ -1207,6 +1226,7 @@ function sidebarHtml(extensionPath: string): string {
   const builderRender = document.getElementById('builderRender');
   const builderInsert = document.getElementById('builderInsert');
   const builderCancel = document.getElementById('builderCancel');
+  const componentMime = '${FUMADOCS_COMPONENT_MIME}';
 
   let enabledState = false;
 
@@ -1674,6 +1694,24 @@ function sidebarHtml(extensionPath: string): string {
 
   function clone(obj) { return JSON.parse(JSON.stringify(obj)); }
 
+  function defaultComponentText(id) {
+    const def = COMPONENTS[id];
+    if (!def) return '';
+    const scalars = {};
+    const lists = {};
+    let grid = null;
+    for (const field of def.fields) scalars[field.key] = field.default;
+    for (const listDef of def.lists) lists[listDef.key] = clone(listDef.default);
+    if (def.grid) grid = clone(def.grid.default);
+    const prev = state;
+    state = { scalars: scalars, lists: lists, grid: grid };
+    try {
+      return def.build(collect());
+    } finally {
+      state = prev;
+    }
+  }
+
   function collect() {
     const v = {};
     for (const k in state.scalars) v[k] = state.scalars[k];
@@ -2045,6 +2083,16 @@ function sidebarHtml(extensionPath: string): string {
       btn.innerHTML =
         '<span class="label">' + c.label + '</span>' +
         '<span class="desc">' + c.description + '</span>';
+      btn.draggable = !!enabled;
+      btn.addEventListener('dragstart', function (e) {
+        if (!enabled || !e.dataTransfer) return;
+        const text = c.configurable ? defaultComponentText(c.id) : (c.snippet || '');
+        if (!text.trim()) return;
+        const payload = JSON.stringify({ id: c.id, label: c.label, snippet: text });
+        e.dataTransfer.effectAllowed = 'copy';
+        e.dataTransfer.setData(componentMime, payload);
+        e.dataTransfer.setData('text/plain', text);
+      });
       btn.addEventListener('click', function () {
         if (!enabled) return;
         if (c.configurable) openBuilder(c.id);

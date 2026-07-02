@@ -2,7 +2,7 @@
   "name": "fumadocs-vscode-plugin",
   "displayName": "Fumadocs Preview",
   "description": "Live-preview any MDX/Markdown file or folder with a real Fumadocs site, rendered side-by-side inside VSCode.",
-  "version": "1.2.8",
+  "version": "1.2.9",
   "publisher": "researchanddesire",
   "license": "MIT",
   "repository": {
@@ -448,7 +448,8 @@
     "build": "node esbuild.js --production",
     "watch": "node esbuild.js --watch",
     "typecheck": "tsc --noEmit",
-    "test": "node scripts/windows-toolchain-smoke-test.js",
+    "test": "node scripts/insert-plan-test.js && node scripts/windows-toolchain-smoke-test.js",
+    "test:insert-plan": "node scripts/insert-plan-test.js",
     "test:windows-toolchain": "node scripts/windows-toolchain-smoke-test.js",
     "package": "vsce package --no-dependencies"
   },
